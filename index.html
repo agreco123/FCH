@@ -1,0 +1,1256 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8"/>
+<meta name="viewport" content="width=device-width, initial-scale=1.0"/>
+<title>WNY Land Development Command Center — V8 PRO</title>
+<link rel="preconnect" href="https://fonts.googleapis.com"/>
+<link href="https://fonts.googleapis.com/css2?family=DM+Sans:ital,opsz,wght@0,9..40,300;0,9..40,400;0,9..40,500;0,9..40,600;0,9..40,700&family=JetBrains+Mono:wght@400;500;600&display=swap" rel="stylesheet"/>
+<style>
+*{margin:0;padding:0;box-sizing:border-box}
+body{background:#0c0f1a;color:#e2e8f0;font-family:'DM Sans',-apple-system,BlinkMacSystemFont,sans-serif;overflow-x:hidden}
+#root{min-height:100vh}
+::-webkit-scrollbar{width:6px;height:6px}
+::-webkit-scrollbar-track{background:transparent}
+::-webkit-scrollbar-thumb{background:rgba(255,255,255,0.08);border-radius:3px}
+::-webkit-scrollbar-thumb:hover{background:rgba(255,255,255,0.14)}
+select option{background:#1e293b;color:#e2e8f0}
+input[type="date"]::-webkit-calendar-picker-indicator{filter:invert(0.7)}
+@keyframes fadeSlideIn{from{opacity:0;transform:translateY(12px)}to{opacity:1;transform:translateY(0)}}
+@keyframes pulse{0%,100%{opacity:1}50%{opacity:0.5}}
+</style>
+</head>
+<body>
+<div id="root"></div>
+<script src="https://cdnjs.cloudflare.com/ajax/libs/react/18.2.0/umd/react.production.min.js"></script>
+<script src="https://cdnjs.cloudflare.com/ajax/libs/react-dom/18.2.0/umd/react-dom.production.min.js"></script>
+<script src="https://cdnjs.cloudflare.com/ajax/libs/babel-standalone/7.23.9/babel.min.js"></script>
+<script type="text/babel">
+const{useState,useEffect,useRef,useCallback,useMemo}=React;
+
+// === DATA LAYER ===
+// Phase colors — shared across tracker and dev manager
+const PC = {
+  "Pre-Application":          { bar: "#10b981", bg: "rgba(16,185,129,0.08)", border: "#10b981", glow: "rgba(16,185,129,0.2)" },
+  "Sketch Plan":              { bar: "#f59e0b", bg: "rgba(245,158,11,0.08)", border: "#f59e0b", glow: "rgba(245,158,11,0.2)" },
+  "Concept Plan":             { bar: "#eab308", bg: "rgba(234,179,8,0.08)", border: "#eab308", glow: "rgba(234,179,8,0.2)" },
+  "Preliminary Plat":         { bar: "#f97316", bg: "rgba(249,115,22,0.08)", border: "#f97316", glow: "rgba(249,115,22,0.2)" },
+  "Agency Referrals":         { bar: "#fb923c", bg: "rgba(251,146,60,0.08)", border: "#fb923c", glow: "rgba(251,146,60,0.2)" },
+  "SEQR Review":              { bar: "#dc2626", bg: "rgba(220,38,38,0.08)", border: "#dc2626", glow: "rgba(220,38,38,0.2)" },
+  "Public Hearing":           { bar: "#e11d48", bg: "rgba(225,29,72,0.08)", border: "#e11d48", glow: "rgba(225,29,72,0.2)" },
+  "Town Board Review":        { bar: "#be185d", bg: "rgba(190,24,93,0.08)", border: "#be185d", glow: "rgba(190,24,93,0.2)" },
+  "Planning Board Review":    { bar: "#c026d3", bg: "rgba(192,38,211,0.08)", border: "#c026d3", glow: "rgba(192,38,211,0.2)" },
+  "Infrastructure Permitting":{ bar: "#ef4444", bg: "rgba(239,68,68,0.08)", border: "#ef4444", glow: "rgba(239,68,68,0.2)" },
+  "Final Plat":               { bar: "#6366f1", bg: "rgba(99,102,241,0.08)", border: "#6366f1", glow: "rgba(99,102,241,0.2)" },
+  "Construction Permitting":  { bar: "#8b5cf6", bg: "rgba(139,92,246,0.08)", border: "#8b5cf6", glow: "rgba(139,92,246,0.2)" },
+  "Construction":             { bar: "#06b6d4", bg: "rgba(6,182,212,0.08)", border: "#06b6d4", glow: "rgba(6,182,212,0.2)" },
+  "Inspections & Acceptance": { bar: "#22c55e", bg: "rgba(34,197,94,0.08)", border: "#22c55e", glow: "rgba(34,197,94,0.2)" },
+  "Inspections & CO":         { bar: "#22c55e", bg: "rgba(34,197,94,0.08)", border: "#22c55e", glow: "rgba(34,197,94,0.2)" },
+  "County Clerk Filing":      { bar: "#0ea5e9", bg: "rgba(14,165,233,0.08)", border: "#0ea5e9", glow: "rgba(14,165,233,0.2)" },
+};
+const gpc=p=>PC[p]||{bar:"#64748b",bg:"rgba(100,116,139,0.08)",border:"#64748b",glow:"rgba(100,116,139,0.2)"};
+
+// 6-state status system (used by dev manager)
+const STATUSES=[
+  {key:"not_started",label:"Not Started",icon:"○",color:"#475569"},
+  {key:"in_progress",label:"In Progress",icon:"◐",color:"#f59e0b"},
+  {key:"under_review",label:"Under Review",icon:"◑",color:"#a78bfa"},
+  {key:"blocked",label:"Blocked",icon:"⊘",color:"#ef4444"},
+  {key:"waiting",label:"Waiting on Agency",icon:"◷",color:"#fb923c"},
+  {key:"complete",label:"Complete",icon:"●",color:"#22c55e"},
+];
+const getStatus=k=>STATUSES.find(s=>s.key===k)||STATUSES[0];
+const nextStatus=k=>{const i=STATUSES.findIndex(s=>s.key===k);return STATUSES[(i+1)%STATUSES.length].key};
+
+// Style constants
+const S={fontFamily:"'DM Sans',-apple-system,BlinkMacSystemFont,sans-serif",monoFont:"'JetBrains Mono',monospace"};
+// Town data: amherst
+const AT=[
+{id:"pre1",name:"Site Feasibility & Due Diligence",phase:"Pre-Application",category:"Applicant",min:14,avg:21,max:45,dependencies:[],responsible:"Applicant / Engineer",notes:"Title search, survey, zoning check, utility, flood zone, wetlands per NYSDEC.",confidence:"High",risk:false,risk_desc:""},
+{id:"pre2",name:"Boundary & Topographic Survey",phase:"Pre-Application",category:"Applicant",min:14,avg:30,max:60,dependencies:["pre1"],responsible:"NYS Licensed Surveyor",notes:"Required per §3-6. NAVD 1988 datum.",confidence:"High",risk:false,risk_desc:""},
+{id:"pre3",name:"Pre-Application Conference",phase:"Pre-Application",category:"Town",min:7,avg:14,max:30,dependencies:["pre1"],responsible:"Planning Director",notes:"MANDATORY per §4-2. Classifies Major/Minor per §4-3. (716) 631-7051.",confidence:"High",risk:false,risk_desc:""},
+{id:"pre4",name:"SEQR EAF Preparation",phase:"Pre-Application",category:"Applicant",min:7,avg:14,max:30,dependencies:["pre3"],responsible:"Environmental Consultant",notes:"Per §4-4-4A. Chapter 104 governs.",confidence:"High",risk:true,risk_desc:"Full EIS can add 6-18 months."},
+{id:"sk1",name:"Sketch Plan Preparation",phase:"Sketch Plan",category:"Applicant",min:21,avg:45,max:90,dependencies:["pre2","pre3","pre4"],responsible:"Applicant / PE",notes:"Per §4-6-1. Streets, lots, open space, drainage.",confidence:"High",risk:false,risk_desc:""},
+{id:"sk2",name:"Sketch Plan Submission & Completeness",phase:"Sketch Plan",category:"Town",min:5,avg:10,max:21,dependencies:["sk1"],responsible:"Planning Director",notes:"Fee to Town Clerk. Per §4-4-4. Void if not complete in 6 months.",confidence:"High",risk:false,risk_desc:""},
+{id:"sk3",name:"Agency Referrals",phase:"Sketch Plan",category:"Town",min:20,avg:30,max:40,dependencies:["sk2"],responsible:"Multiple Departments",notes:"Per §4-6-1B. 30 days from completeness.",confidence:"High",risk:false,risk_desc:""},
+{id:"sk4",name:"Planning Board Hearing - Sketch",phase:"Sketch Plan",category:"Town",min:14,avg:30,max:60,dependencies:["sk3"],responsible:"Planning Board",notes:"Per §4-6-1C. 1st & 3rd Thursdays. 62-day clock.",confidence:"High",risk:true,risk_desc:"Bi-monthly meetings avg ~15 day wait."},
+{id:"sk5",name:"Sketch Plan Approval (2-Year)",phase:"Sketch Plan",category:"Milestone",min:0,avg:0,max:0,dependencies:["sk4"],responsible:"Planning Board",notes:"Per §1-9-1. Expires 2 years.",confidence:"High",risk:false,risk_desc:""},
+{id:"pp1",name:"Preliminary Plat Preparation",phase:"Preliminary Plat",category:"Applicant",min:45,avg:90,max:180,dependencies:["sk5"],responsible:"Applicant / PE",notes:"Per §4-6-2. Full engineering drawings.",confidence:"High",risk:false,risk_desc:""},
+{id:"pp2",name:"Preliminary Plat Submission",phase:"Preliminary Plat",category:"Town",min:5,avg:14,max:21,dependencies:["pp1"],responsible:"Planning Director",notes:"SEQR determination required.",confidence:"High",risk:false,risk_desc:""},
+{id:"pp3",name:"SEQR Determination",phase:"Preliminary Plat",category:"Town",min:20,avg:30,max:45,dependencies:["pp2"],responsible:"Planning Board",notes:"Per Chapter 104. Neg Dec continues; Pos Dec triggers EIS.",confidence:"High",risk:true,risk_desc:"Full EIS adds 6-18+ months."},
+{id:"pp4",name:"Agency Referrals - Prelim",phase:"Preliminary Plat",category:"Town",min:20,avg:30,max:40,dependencies:["pp2"],responsible:"Multiple Departments",notes:"Per §4-6-2B. 30-day window.",confidence:"High",risk:false,risk_desc:""},
+{id:"pp5",name:"PB Hearing - Preliminary",phase:"Preliminary Plat",category:"Town",min:14,avg:30,max:60,dependencies:["pp3","pp4"],responsible:"Planning Board",notes:"Per §4-6-2C. 62-day clock.",confidence:"High",risk:true,risk_desc:"Contested hearings may span sessions."},
+{id:"pp6",name:"Preliminary Approval (6-Month)",phase:"Preliminary Plat",category:"Milestone",min:0,avg:0,max:0,dependencies:["pp5"],responsible:"Planning Board",notes:"Per §1-9-1. 6-month validity.",confidence:"High",risk:true,risk_desc:"Tight window."},
+{id:"inf0",name:"NYSDEC JD - 2025",phase:"Infrastructure Permitting",category:"State Agency",min:30,avg:90,max:180,dependencies:["pp6"],responsible:"NYSDEC Region 9",notes:"2025 expanded wetlands. Sequential JD required.",confidence:"Medium",risk:true,risk_desc:"Adds 90-180 days."},
+{id:"inf1",name:"NYSDEC Wetlands Permit",phase:"Infrastructure Permitting",category:"State Agency",min:90,avg:180,max:365,dependencies:["inf0"],responsible:"NYSDEC Region 9",notes:"Article 24. GP-0-25-003 for minor.",confidence:"Medium",risk:true,risk_desc:"Individual permit 90-365 days."},
+{id:"inf2",name:"Erie County Health Approval",phase:"Infrastructure Permitting",category:"County",min:30,avg:60,max:120,dependencies:["pp6"],responsible:"Erie County Health",notes:"Per §3-3-5A.",confidence:"High",risk:false,risk_desc:""},
+{id:"inf3",name:"Highway Access Permit",phase:"Infrastructure Permitting",category:"State/County",min:30,avg:60,max:120,dependencies:["pp6"],responsible:"NYSDOT / Erie DPW",notes:"Required for state/county road access.",confidence:"Medium",risk:true,risk_desc:"60-180 days."},
+{id:"inf4",name:"USACE Section 404",phase:"Infrastructure Permitting",category:"Federal",min:60,avg:120,max:365,dependencies:["pp6"],responsible:"USACE Buffalo",notes:"Nationwide or Individual permit.",confidence:"Medium",risk:true,risk_desc:"Individual 6-12+ months."},
+{id:"fp1",name:"Final Plat Preparation",phase:"Final Plat",category:"Applicant",min:30,avg:60,max:90,dependencies:["pp6","inf2"],responsible:"Applicant / PE",notes:"Per §4-6-3A. Within 6 months of prelim.",confidence:"High",risk:false,risk_desc:""},
+{id:"fp2",name:"Final Plat Staff Review",phase:"Final Plat",category:"Town",min:10,avg:21,max:30,dependencies:["fp1"],responsible:"Planning Director",notes:"Per §4-6-3B.",confidence:"High",risk:false,risk_desc:""},
+{id:"fp3",name:"PB Final Plat Approval",phase:"Final Plat",category:"Town",min:14,avg:30,max:60,dependencies:["fp2"],responsible:"Planning Board",notes:"Per §4-6-3. No hearing if substantial agreement.",confidence:"High",risk:true,risk_desc:"Hearing adds 15-45d if not in agreement."},
+{id:"fp4",name:"Town Attorney Review",phase:"Final Plat",category:"Town",min:7,avg:14,max:30,dependencies:["fp3"],responsible:"Town Attorney",notes:"Per §4-6-3K. Covenants before filing.",confidence:"High",risk:false,risk_desc:""},
+{id:"fp5",name:"County Clerk Filing",phase:"Final Plat",category:"Milestone",min:3,avg:7,max:14,dependencies:["fp4"],responsible:"Applicant",notes:"Per §4-6-3F. Within 62 days of signature.",confidence:"High",risk:false,risk_desc:""},
+{id:"cp1",name:"PIP Permit",phase:"Construction Permitting",category:"Town",min:14,avg:30,max:60,dependencies:["fp5"],responsible:"Town Board / Engineer",notes:"Per §5-3-1.",confidence:"High",risk:false,risk_desc:""},
+{id:"cp2",name:"Performance Bond",phase:"Construction Permitting",category:"Applicant",min:7,avg:21,max:45,dependencies:["fp5"],responsible:"Bonding Company",notes:"Per §5-2. Up to 125%, 3-year term.",confidence:"High",risk:false,risk_desc:""},
+{id:"cp3",name:"Building Permits",phase:"Construction Permitting",category:"Town",min:14,avg:21,max:45,dependencies:["cp1"],responsible:"Building Dept",notes:"Per §1-7-2.",confidence:"High",risk:false,risk_desc:""},
+{id:"con1",name:"Site Clearing & Grading",phase:"Construction",category:"Applicant",min:14,avg:30,max:60,dependencies:["cp1"],responsible:"General Contractor",notes:"SPDES GP. Erosion control.",confidence:"High",risk:false,risk_desc:""},
+{id:"con2",name:"Underground Utilities",phase:"Construction",category:"Applicant",min:30,avg:60,max:120,dependencies:["con1"],responsible:"Utility Contractors",notes:"Per §3-3-1. Sewer before street.",confidence:"High",risk:false,risk_desc:""},
+{id:"con3",name:"Road Construction",phase:"Construction",category:"Applicant",min:30,avg:60,max:120,dependencies:["con2"],responsible:"Contractor",notes:"Per §3-2-4. 28\' min pavement.",confidence:"High",risk:false,risk_desc:""},
+{id:"con4",name:"Sidewalks & Curbs",phase:"Construction",category:"Applicant",min:14,avg:30,max:60,dependencies:["con3"],responsible:"Contractor",notes:"Per §3-2-4H. ADA ramps required.",confidence:"High",risk:false,risk_desc:""},
+{id:"con5",name:"Trees & Monuments",phase:"Construction",category:"Applicant",min:7,avg:14,max:30,dependencies:["con4"],responsible:"Surveyor / Landscape",notes:"Per §3-2-4Q. 1 tree/40 LF. Per §3-6 monuments.",confidence:"High",risk:false,risk_desc:""},
+{id:"con6",name:"Vertical Construction",phase:"Construction",category:"Applicant",min:120,avg:180,max:365,dependencies:["con3","cp3"],responsible:"Builder",notes:"Per lot permits. April-Nov season.",confidence:"Medium",risk:true,risk_desc:"WNY winters (92\" snow)."},
+{id:"insp1",name:"Town Engineer Inspections",phase:"Inspections & Acceptance",category:"Town",min:0,avg:0,max:0,dependencies:["con1"],responsible:"Town Engineer",notes:"Per §5-4-2. Costs to petitioner.",confidence:"High",risk:false,risk_desc:""},
+{id:"insp2",name:"PE As-Built Certification",phase:"Inspections & Acceptance",category:"Applicant",min:14,avg:30,max:60,dependencies:["con5","con2"],responsible:"Registered PE",notes:"Per §5-4-1.",confidence:"High",risk:false,risk_desc:""},
+{id:"insp3",name:"Maintenance Bond (25%)",phase:"Inspections & Acceptance",category:"Applicant",min:7,avg:14,max:21,dependencies:["insp2"],responsible:"Bonding Company",notes:"Per §5-5. 2-year, 25%.",confidence:"High",risk:false,risk_desc:""},
+{id:"insp4",name:"Town Board Acceptance",phase:"Inspections & Acceptance",category:"Town",min:10,avg:21,max:45,dependencies:["insp3"],responsible:"Town Board",notes:"Per §4-6-3I(2). Streets private until accepted.",confidence:"High",risk:true,risk_desc:"Delayed if deficiencies."},
+{id:"insp5",name:"Certificate of Occupancy",phase:"Inspections & Acceptance",category:"Town",min:7,avg:14,max:30,dependencies:["con6","insp1"],responsible:"Building Dept",notes:"Per §1-7-2.",confidence:"High",risk:false,risk_desc:""}
+];
+// Town data: clarence
+const CT=[
+{id:"c1",name:"Site Feasibility & Due Diligence",phase:"Pre-Application",category:"Applicant",min:14,avg:21,max:45,dependencies:[],responsible:"Applicant / Engineer",notes:"Zoning per Ch. 229, Ch. 91 environmental review. Master Plan conformance check critical — TB gates concept referral.",confidence:"High",risk:false,risk_desc:""},
+{id:"c2",name:"Boundary & Topographic Survey",phase:"Pre-Application",category:"Applicant",min:14,avg:30,max:60,dependencies:["c1"],responsible:"NYS Licensed Surveyor",notes:"Per §193-13, sealed by licensed surveyor. Wetland delineation flagging, flood zone, conservation areas per Ch. 200 §200-46.",confidence:"High",risk:false,risk_desc:""},
+{id:"c3",name:"Pre-Application Conference",phase:"Pre-Application",category:"Town",min:7,avg:14,max:30,dependencies:["c1"],responsible:"Dir. Community Development",notes:"Per §193-13B. Review requirements, timetable, ODA eligibility (Article V). (716) 741-8930.",confidence:"High",risk:false,risk_desc:""},
+{id:"c4",name:"SEQR EAF Preparation",phase:"Pre-Application",category:"Applicant",min:7,avg:14,max:30,dependencies:["c3"],responsible:"Environmental Consultant",notes:"Per §193-13E. TB=lead agency for clustering; PB=lead otherwise. Ch. 91 Environmental Quality Review.",confidence:"High",risk:true,risk_desc:"Full EIS adds 6-18 months. Coordinated review between TB/PB adds complexity."},
+{id:"c5",name:"Concept Plan Preparation",phase:"Concept Plan",category:"Applicant",min:21,avg:45,max:90,dependencies:["c2","c3","c4"],responsible:"Applicant / PE",notes:"Per §193-15B(1). 9 copies + checklist + Ch. 99 fee. 2 weeks before TB meeting.",confidence:"High",risk:false,risk_desc:""},
+{id:"c6",name:"Town Board Introduction & Master Plan Review",phase:"Concept Plan",category:"Town",min:14,avg:21,max:45,dependencies:["c5"],responsible:"Town Board",notes:"Per §193-15B(2)(a-b). TB reviews Master Plan conformance. Refers to PB only if conforming.",confidence:"High",risk:true,risk_desc:"TB may not refer if not conforming to Master Plan. Project can die here."},
+{id:"c7",name:"PB SEQR & Environmental Review",phase:"Concept Plan",category:"Town",min:14,avg:30,max:60,dependencies:["c6"],responsible:"Planning Board",notes:"Per §193-15B(2)(d). Environmental, zoning, development pattern review. ODA provisions (Article V) evaluated.",confidence:"High",risk:true,risk_desc:"SEQR coordination between boards adds complexity."},
+{id:"c8",name:"Public Hearing — Concept Plan",phase:"Concept Plan",category:"Town",min:14,avg:30,max:45,dependencies:["c7"],responsible:"TB or PB",notes:"Per §193-15B(2)(f). Within 45 days. 5-day newspaper notice. 500-ft owner notice.",confidence:"High",risk:false,risk_desc:""},
+{id:"c9",name:"Concept Plan Approval",phase:"Concept Plan",category:"Milestone",min:0,avg:7,max:14,dependencies:["c8"],responsible:"TB or PB",notes:"Per §193-15B(2)(g). Within 62 days of introduction. Expires 2 years.",confidence:"High",risk:true,risk_desc:"Dual-board review adds time vs. single-board towns."},
+{id:"c10",name:"Development Plan Preparation",phase:"Preliminary Plat",category:"Applicant",min:45,avg:90,max:180,dependencies:["c9"],responsible:"Applicant / PE",notes:"Per §193-15C. Within 2 years of concept. Full engineering: drainage per §193-24, streets per §193-27, water per Ch. 223, sewer per Ch. 177.",confidence:"High",risk:false,risk_desc:""},
+{id:"c11",name:"Development Plan Submission",phase:"Preliminary Plat",category:"Town",min:5,avg:14,max:21,dependencies:["c10"],responsible:"PB / Dir. Community Dev.",notes:"Per §193-15D(1). Environmental review form. Distributed to all reviewing agencies.",confidence:"High",risk:false,risk_desc:""},
+{id:"c12",name:"Agency Referrals — Internal Departments",phase:"Agency Referrals",category:"Town",min:20,avg:30,max:45,dependencies:["c11"],responsible:"Engineer, Highway, Building",notes:"Per §193-13F. Town Engineer (drainage/water/sewer), Highway Supt (roads/signs), Building Dept (zoning compliance).",confidence:"High",risk:false,risk_desc:""},
+{id:"c12b",name:"Agency Referrals — Erie County (GML §239)",phase:"Agency Referrals",category:"County",min:20,avg:30,max:45,dependencies:["c11"],responsible:"Erie County DEDP",notes:"Per GML §239-n. County has 30 days. Required for parcels within 500 ft of county/state road, municipal boundary, or county-owned land.",confidence:"High",risk:false,risk_desc:""},
+{id:"c13",name:"Adequate Public Facilities Test",phase:"Agency Referrals",category:"Town",min:14,avg:30,max:60,dependencies:["c11"],responsible:"Multiple Departments",notes:"Per §193-17. UNIQUE TO CLARENCE. Evaluates: educational capacity, utility capacity, public service capacity. Special districts per §193-17B.",confidence:"High",risk:true,risk_desc:"Can block approval if infrastructure capacity is deficient. May require district formation."},
+{id:"c14",name:"PB Action on Development Plan (45d)",phase:"Preliminary Plat",category:"Town",min:14,avg:30,max:45,dependencies:["c12","c12b","c13"],responsible:"Planning Board",notes:"Per §193-15E(1). Within 45 days of completed plan + all agency approvals received.",confidence:"High",risk:false,risk_desc:""},
+{id:"c15",name:"Development Plan Approval (2-Year)",phase:"Preliminary Plat",category:"Milestone",min:0,avg:0,max:0,dependencies:["c14"],responsible:"Planning Board",notes:"Per §193-15F(2). 2-year expiration. Extension up to 2 additional years available.",confidence:"High",risk:false,risk_desc:""},
+{id:"c16",name:"NYSDEC Jurisdictional Determination",phase:"Infrastructure Permitting",category:"State Agency",min:30,avg:90,max:180,dependencies:["c15"],responsible:"NYSDEC Region 9",notes:"2025 expanded wetlands jurisdiction. Sequential JD required before permit application.",confidence:"Medium",risk:true,risk_desc:"Adds 90-180 days if wetlands present on site."},
+{id:"c17",name:"NYSDEC Wetlands Permit (Article 24)",phase:"Infrastructure Permitting",category:"State Agency",min:90,avg:180,max:365,dependencies:["c16"],responsible:"NYSDEC Region 9",notes:"Article 24 ECL. GP-0-25-003 for minor impacts (<0.1 acre). Individual permit for larger disturbance.",confidence:"Medium",risk:true,risk_desc:"Individual permit 90-365 days."},
+{id:"c17b",name:"USACE Section 404 Permit",phase:"Infrastructure Permitting",category:"Federal",min:60,avg:120,max:365,dependencies:["c15"],responsible:"USACE Buffalo District",notes:"Required for fill in waters of US/wetlands. Nationwide 29 for residential or Individual permit. Erie County exposure.",confidence:"Medium",risk:true,risk_desc:"Individual permit 6-12+ months."},
+{id:"c18",name:"Erie County Health Dept Approval",phase:"Infrastructure Permitting",category:"County",min:30,avg:60,max:120,dependencies:["c15"],responsible:"Erie County Health",notes:"Per §193-13F(2). Ch. 177 Sewers, Ch. 223 Water. Sanitary sewer extension and water supply approval.",confidence:"High",risk:false,risk_desc:""},
+{id:"c19",name:"Special District Formation (Water/Sewer/Lighting)",phase:"Infrastructure Permitting",category:"Town",min:30,avg:60,max:120,dependencies:["c15"],responsible:"Town Board",notes:"Per §193-17B. Ch. 99 fees. NYS Town Law Art. 12. Public hearing required for each district.",confidence:"High",risk:true,risk_desc:"TB hearing adds 60-120 days. Required before construction can begin."},
+{id:"c19b",name:"Highway Access Permit (State/County)",phase:"Infrastructure Permitting",category:"State/County",min:30,avg:60,max:120,dependencies:["c15"],responsible:"NYSDOT / Erie County DPW",notes:"Required for access onto state or county roads. Traffic impact study if warranted by trip generation.",confidence:"Medium",risk:true,risk_desc:"NYSDOT reviews 60-180 days."},
+{id:"c20",name:"Grading Permit (Ch. 79)",phase:"Infrastructure Permitting",category:"Town",min:7,avg:14,max:30,dependencies:["c15"],responsible:"Town Engineer",notes:"Per Ch. 79 Clearing and Grading. Required before any land disturbance. Separate from PIP.",confidence:"High",risk:false,risk_desc:""},
+{id:"c20b",name:"Public Improvement Permit (PIP)",phase:"Infrastructure Permitting",category:"Town",min:14,avg:30,max:60,dependencies:["c15"],responsible:"Town Engineer",notes:"Per §193-15H. Ch. 121 Public and Private Improvements. Performance bond required before issuance.",confidence:"High",risk:false,risk_desc:""},
+{id:"c20c",name:"Performance Bond",phase:"Infrastructure Permitting",category:"Applicant",min:7,avg:21,max:45,dependencies:["c15"],responsible:"Bonding Company",notes:"Per NYS Town Law §277. Bond = estimated cost of all improvements. 3-year term typical.",confidence:"High",risk:false,risk_desc:""},
+{id:"c21",name:"Final Plat Preparation",phase:"Final Plat",category:"Applicant",min:30,avg:60,max:90,dependencies:["c15","c18"],responsible:"Applicant / PE",notes:"Per §193-16A. Max 2 phases under construction simultaneously.",confidence:"High",risk:false,risk_desc:""},
+{id:"c22",name:"Final Plat Review",phase:"Final Plat",category:"Town",min:10,avg:21,max:30,dependencies:["c21"],responsible:"Director / Engineer / Atty",notes:"Per §193-16B(1). Distributed to all agencies for final sign-off.",confidence:"High",risk:false,risk_desc:""},
+{id:"c23",name:"Final Plat Approval (62-Day Clock)",phase:"Final Plat",category:"Town",min:14,avg:30,max:62,dependencies:["c22"],responsible:"TB or PB",notes:"Per §193-16B(3). 62-day statutory clock. Failure to act = deemed approval.",confidence:"High",risk:false,risk_desc:""},
+{id:"c24",name:"Conditional Compliance (180d Window)",phase:"Final Plat",category:"Applicant",min:14,avg:60,max:180,dependencies:["c23"],responsible:"Applicant",notes:"Per §193-16B(5). Two 90-day extensions possible for condition satisfaction.",confidence:"High",risk:true,risk_desc:"180-day window. Failure = plat lapses."},
+{id:"c25",name:"Erie County Clerk Filing",phase:"County Clerk Filing",category:"Milestone",min:3,avg:7,max:14,dependencies:["c24"],responsible:"Applicant",notes:"Per §193-14B(2)(d). Within 62 days of PB Chair signature. Filed with Erie County Clerk.",confidence:"High",risk:false,risk_desc:""},
+{id:"c26",name:"Site Clearing & Grading",phase:"Construction",category:"Applicant",min:14,avg:30,max:60,dependencies:["c20","c20b","c25"],responsible:"General Contractor",notes:"Ch. 79 Grading Permit. Ch. 131 Landscape Conservation — tree preservation plan. SPDES GP-0-24-001.",confidence:"High",risk:false,risk_desc:""},
+{id:"c26b",name:"Underground Utilities (Water & Sewer)",phase:"Construction",category:"Applicant",min:30,avg:60,max:120,dependencies:["c26"],responsible:"Utility Contractors",notes:"Ch. 223 Water, Ch. 177 Sewers per Erie County Health specs. Sewer installed before street base. Pressure/leak testing required.",confidence:"High",risk:false,risk_desc:""},
+{id:"c26c",name:"Drainage & Stormwater Construction",phase:"Construction",category:"Applicant",min:21,avg:45,max:90,dependencies:["c26"],responsible:"Utility Contractors",notes:"Per §193-24 Drainage. Storm sewer, detention/retention per Manual of Standards. Concurrent with underground utilities.",confidence:"High",risk:false,risk_desc:""},
+{id:"c27",name:"Road Construction (Base & Paving)",phase:"Construction",category:"Applicant",min:30,avg:60,max:120,dependencies:["c26b","c26c"],responsible:"Paving Contractor",notes:"Per §193-27 Streets. Subbase, base course, binder, wearing course per Manual of Standards.",confidence:"High",risk:false,risk_desc:""},
+{id:"c27b",name:"Sidewalks, Curbs & Monuments",phase:"Construction",category:"Applicant",min:14,avg:30,max:60,dependencies:["c27"],responsible:"Contractor / Surveyor",notes:"Per §193-27. ADA-compliant ramps required. Iron pin monuments per §193-13(3). Street name signs per Highway Supt.",confidence:"High",risk:false,risk_desc:""},
+{id:"c28",name:"Park & Pedestrian Improvements",phase:"Construction",category:"Applicant",min:14,avg:30,max:60,dependencies:["c27"],responsible:"Landscape Contractor",notes:"Per §193-30 Park dedication (or fee-in-lieu), §193-30.1 Pedestrian & educational facilities. Landscaping per Ch. 131.",confidence:"High",risk:false,risk_desc:""},
+{id:"c29",name:"Vertical Construction (Homes)",phase:"Construction",category:"Applicant",min:120,avg:180,max:365,dependencies:["c27","c20c"],responsible:"Builder",notes:"Per Ch. 67 Building Construction. No building permits until County Clerk filing complete. April-Nov season.",confidence:"Medium",risk:true,risk_desc:"WNY winters (92\" avg snow). Construction season April-November."},
+{id:"c30",name:"Town Engineer Inspections (Ongoing)",phase:"Inspections & Acceptance",category:"Town",min:0,avg:0,max:0,dependencies:["c26"],responsible:"Town Engineer",notes:"Per §193-15F(3). Ongoing during construction phases. Inspection costs borne by developer.",confidence:"High",risk:false,risk_desc:""},
+{id:"c30b",name:"PE As-Built Certification",phase:"Inspections & Acceptance",category:"Applicant",min:14,avg:30,max:60,dependencies:["c27b","c26b"],responsible:"Registered PE",notes:"Certified as-built plans for all infrastructure. Required before completion certificate issuance.",confidence:"High",risk:false,risk_desc:""},
+{id:"c30c",name:"Certificate of Subdivision Completion",phase:"Inspections & Acceptance",category:"Town",min:7,avg:14,max:30,dependencies:["c30b","c28"],responsible:"Town Engineer",notes:"Per §193-15F(3). Issued when all infrastructure meets Manual of Standards specifications.",confidence:"High",risk:false,risk_desc:""},
+{id:"c31",name:"Maintenance Bond & Road Acceptance",phase:"Inspections & Acceptance",category:"Town",min:10,avg:21,max:45,dependencies:["c30c"],responsible:"Town Board",notes:"Per §193-15G. Maintenance bond per NYS Town Law §277. TB resolution to accept roads/infrastructure.",confidence:"High",risk:true,risk_desc:"Roads remain private until TB acceptance. Deficiencies delay acceptance."},
+{id:"c32",name:"Certificate of Occupancy",phase:"Inspections & Acceptance",category:"Town",min:7,avg:14,max:30,dependencies:["c29","c30c"],responsible:"Building Dept",notes:"Per §193-16B(6)(a). Utilities & streets must be complete or bonded. Issued per-dwelling.",confidence:"High",risk:false,risk_desc:""}
+];
+// Town data: hamburg
+const HT=[
+{id:"h1",name:"Site Feasibility & Due Diligence",phase:"Pre-Application",category:"Applicant",min:14,avg:21,max:45,dependencies:[],responsible:"Applicant / Engineer",notes:"Zoning check — condominiums only in R-3. Flood zone, wetlands, soils assessment. Review fee schedule rev. 3/25/24.",confidence:"High",risk:false,risk_desc:""},
+{id:"h2",name:"Boundary & Topographic Survey",phase:"Pre-Application",category:"Applicant",min:14,avg:30,max:60,dependencies:["h1"],responsible:"NYS Licensed Surveyor",notes:"5 copies of topographic map required. NAVD 1988 datum. Include wetland flagging if applicable.",confidence:"High",risk:false,risk_desc:""},
+{id:"h3",name:"Planning Dept Pre-Application Meeting",phase:"Pre-Application",category:"Town",min:7,avg:14,max:21,dependencies:["h1"],responsible:"Joshua Rogers, Planning Dir.",notes:"716-649-2023. 6100 S. Park Ave. Determines Short vs Full EAF. Classifies Major/Minor.",confidence:"High",risk:false,risk_desc:""},
+{id:"h4",name:"SEQR EAF Preparation",phase:"Pre-Application",category:"Applicant",min:7,avg:14,max:30,dependencies:["h3"],responsible:"Environmental Consultant",notes:"Full Form EAF Part 1 required via DEC EAF Mapper. Part 2/3 completed by PB as lead agency.",confidence:"High",risk:true,risk_desc:"Full EIS can add 6-18 months if Positive Declaration."},
+{id:"h5",name:"Sketch Plan Preparation",phase:"Sketch Plan",category:"Applicant",min:14,avg:30,max:60,dependencies:["h2","h3","h4"],responsible:"Applicant / PE",notes:"Fee: Planning $750, Engineering $750 per fee schedule rev. 3/25/24. Lot layout, streets, drainage concept.",confidence:"High",risk:false,risk_desc:""},
+{id:"h6",name:"Sketch Plan Submission (2-Week Deadline)",phase:"Sketch Plan",category:"Applicant",min:1,avg:3,max:7,dependencies:["h5"],responsible:"Applicant",notes:"Must submit 2 weeks prior to PB meeting date. Miss deadline = wait another month.",confidence:"High",risk:true,risk_desc:"Strict 2-week pre-meeting deadline. Monthly PB schedule."},
+{id:"h7",name:"Sketch Plan PB Review",phase:"Sketch Plan",category:"Town",min:14,avg:30,max:45,dependencies:["h6"],responsible:"Planning Board",notes:"PB reviews for conformance with zoning, access, drainage concept, lot layout.",confidence:"High",risk:false,risk_desc:""},
+{id:"h8",name:"Preliminary Plan Preparation",phase:"Preliminary Plat",category:"Applicant",min:30,avg:60,max:120,dependencies:["h7"],responsible:"Applicant / PE",notes:"Scale ≤1 inch=100 ft. Show all items per submittal checklist. Full engineering design for drainage, roads, utilities.",confidence:"High",risk:false,risk_desc:""},
+{id:"h9",name:"Preliminary Plan Submission (2-Week Deadline)",phase:"Preliminary Plat",category:"Applicant",min:1,avg:3,max:7,dependencies:["h8"],responsible:"Applicant",notes:"2 weeks prior to PB meeting. Electronic FEAF Part 1 + Info Sheet + 5 copies.",confidence:"High",risk:true,risk_desc:"Miss 2-week deadline = wait another month for next PB."},
+{id:"h10",name:"SEQR Full EAF Review & Determination",phase:"SEQR Review",category:"Town",min:14,avg:30,max:60,dependencies:["h9"],responsible:"Planning Board",notes:"Full Form EAF Part 1 via DEC EAF Mapper. PB completes Parts 2 & 3. Neg Dec or Pos Dec.",confidence:"High",risk:true,risk_desc:"Positive Declaration triggers full EIS (6-18+ months)."},
+{id:"h11",name:"Agency Referrals — Internal",phase:"Agency Referrals",category:"Town",min:14,avg:21,max:30,dependencies:["h9"],responsible:"Planning Department",notes:"Highway Dept, Engineering Dept, Building Dept, Fire District referrals.",confidence:"High",risk:false,risk_desc:""},
+{id:"h11b",name:"Agency Referrals — Erie County (GML §239)",phase:"Agency Referrals",category:"County",min:20,avg:30,max:45,dependencies:["h9"],responsible:"Erie County DEDP",notes:"Per GML §239-n. 30-day review. Required for state/county road adjacency or municipal boundary proximity.",confidence:"High",risk:false,risk_desc:""},
+{id:"h11c",name:"SWPPP Review & Approval",phase:"Agency Referrals",category:"Town",min:14,avg:30,max:60,dependencies:["h9"],responsible:"Town Engineer / Stormwater Mgr",notes:"Stormwater Pollution Prevention Plan. Fee varies by disturbed acreage per fee schedule 3/25/24. Required for >1 acre disturbance.",confidence:"High",risk:false,risk_desc:""},
+{id:"h12",name:"Public Hearing",phase:"Public Hearing",category:"Town",min:14,avg:30,max:45,dependencies:["h10","h11","h11b"],responsible:"Planning Board",notes:"Fee: $375 (Major with PIP). 5-day newspaper notice. 10-day mailed notice.",confidence:"High",risk:false,risk_desc:""},
+{id:"h13",name:"Preliminary Plat Approval",phase:"Preliminary Plat",category:"Milestone",min:0,avg:7,max:14,dependencies:["h12"],responsible:"Planning Board",notes:"Conditions of approval attached. 6-month validity for final plat submission.",confidence:"High",risk:false,risk_desc:""},
+{id:"h14",name:"NYSDEC Jurisdictional Determination",phase:"Infrastructure Permitting",category:"State Agency",min:30,avg:90,max:180,dependencies:["h13"],responsible:"NYSDEC Region 9",notes:"2025 expanded wetlands jurisdiction. Required if any wetlands or watercourses on/adjacent to site.",confidence:"Medium",risk:true,risk_desc:"Adds 90-180 days if wetlands present."},
+{id:"h14b",name:"NYSDEC Wetlands Permit (Article 24)",phase:"Infrastructure Permitting",category:"State Agency",min:90,avg:180,max:365,dependencies:["h14"],responsible:"NYSDEC Region 9",notes:"Article 24 ECL. Required for disturbance within 100-ft adjacent area of mapped wetland.",confidence:"Medium",risk:true,risk_desc:"Individual permit 90-365 days."},
+{id:"h14c",name:"USACE Section 404 Permit",phase:"Infrastructure Permitting",category:"Federal",min:60,avg:120,max:365,dependencies:["h13"],responsible:"USACE Buffalo District",notes:"Required for fill in waters of US/wetlands. Nationwide 29 for residential. Erie County has significant wetland exposure.",confidence:"Medium",risk:true,risk_desc:"Individual permit 6-12+ months if Nationwide doesn't apply."},
+{id:"h14d",name:"Erie County Health Dept Approval",phase:"Infrastructure Permitting",category:"County",min:30,avg:60,max:120,dependencies:["h13"],responsible:"Erie County Health",notes:"Sanitary sewer extension and water supply plan approval. Required for all major subdivisions.",confidence:"High",risk:false,risk_desc:""},
+{id:"h14e",name:"Highway Access Permit (State/County)",phase:"Infrastructure Permitting",category:"State/County",min:30,avg:60,max:120,dependencies:["h13"],responsible:"NYSDOT / Erie County DPW",notes:"Required for access onto state or county roads. Traffic impact study if warranted.",confidence:"Medium",risk:true,risk_desc:"NYSDOT reviews 60-180 days."},
+{id:"h15",name:"Final Plat Preparation",phase:"Final Plat",category:"Applicant",min:30,avg:45,max:90,dependencies:["h13"],responsible:"Applicant / PE",notes:"Fee: Map Cover $2,000. Incorporate all hearing conditions. Within 6 months of preliminary approval.",confidence:"High",risk:false,risk_desc:""},
+{id:"h16",name:"Final Plat PB Review & Approval",phase:"Final Plat",category:"Town",min:14,avg:30,max:62,dependencies:["h15"],responsible:"Planning Board",notes:"62-day statutory clock per NYS Town Law §276. Filed with Erie County Clerk upon approval.",confidence:"High",risk:false,risk_desc:""},
+{id:"h16b",name:"Erie County Clerk Filing",phase:"Final Plat",category:"Milestone",min:3,avg:7,max:14,dependencies:["h16"],responsible:"Applicant",notes:"Within 62 days of PB Chair signature. Plat void if not timely filed.",confidence:"High",risk:false,risk_desc:""},
+{id:"h17",name:"PIP Permit & Construction Drawings",phase:"Construction Permitting",category:"Town",min:14,avg:30,max:60,dependencies:["h16b"],responsible:"Town Engineer",notes:"Fee: $65/lot up to 20, $45/lot over 20. Approved construction drawings required.",confidence:"High",risk:false,risk_desc:""},
+{id:"h17b",name:"Performance Bond",phase:"Construction Permitting",category:"Applicant",min:7,avg:21,max:45,dependencies:["h16b"],responsible:"Bonding Company",notes:"Per NYS Town Law §277. Bond = estimated cost of all public improvements.",confidence:"High",risk:false,risk_desc:""},
+{id:"h17c",name:"Building Permits",phase:"Construction Permitting",category:"Town",min:7,avg:14,max:30,dependencies:["h17"],responsible:"Building Dept",notes:"Individual lot permits. After PIP and County Clerk filing complete.",confidence:"High",risk:false,risk_desc:""},
+{id:"h18",name:"Site Clearing & Erosion Control",phase:"Construction",category:"Applicant",min:14,avg:30,max:60,dependencies:["h17"],responsible:"General Contractor",notes:"SPDES GP-0-24-001 compliance. Silt fence, inlet protection, stabilized construction entrance.",confidence:"High",risk:false,risk_desc:""},
+{id:"h18b",name:"Underground Utilities (Water & Sewer)",phase:"Construction",category:"Applicant",min:30,avg:60,max:120,dependencies:["h18"],responsible:"Utility Contractors",notes:"Per Erie County Health specs. Sewer installed before road base. Pressure testing, TV inspection required.",confidence:"High",risk:false,risk_desc:""},
+{id:"h18c",name:"Drainage & Stormwater Construction",phase:"Construction",category:"Applicant",min:21,avg:45,max:90,dependencies:["h18"],responsible:"Utility Contractors",notes:"Storm sewer, detention/retention basins per SWPPP. Concurrent with underground utilities.",confidence:"High",risk:false,risk_desc:""},
+{id:"h18d",name:"Road Construction (Base & Paving)",phase:"Construction",category:"Applicant",min:30,avg:60,max:120,dependencies:["h18b","h18c"],responsible:"Paving Contractor",notes:"Subbase, base course, binder, wearing course per Town specs. April-Nov paving season.",confidence:"High",risk:false,risk_desc:""},
+{id:"h18e",name:"Sidewalks, Curbs & Landscaping",phase:"Construction",category:"Applicant",min:14,avg:30,max:60,dependencies:["h18d"],responsible:"Contractor / Landscaper",notes:"ADA-compliant curb ramps. Street trees per Town standards. Monuments set by surveyor.",confidence:"High",risk:false,risk_desc:""},
+{id:"h19",name:"Vertical Construction (Homes)",phase:"Construction",category:"Applicant",min:120,avg:180,max:365,dependencies:["h18d","h17c"],responsible:"Builder",notes:"Per individual lot building permits. WNY climate: April-November primary season.",confidence:"Medium",risk:true,risk_desc:"WNY winters (92\" avg snow). November frost deadline."},
+{id:"h20",name:"Town Engineer Inspections (Ongoing)",phase:"Inspections & Acceptance",category:"Town",min:0,avg:0,max:0,dependencies:["h18"],responsible:"Town Engineer",notes:"Ongoing during all construction phases. Inspection costs borne by developer per fee schedule.",confidence:"High",risk:false,risk_desc:""},
+{id:"h20b",name:"PE As-Built Certification",phase:"Inspections & Acceptance",category:"Applicant",min:14,avg:30,max:60,dependencies:["h18e","h18b"],responsible:"Registered PE",notes:"Certified as-built plans for all infrastructure. Required before bond release.",confidence:"High",risk:false,risk_desc:""},
+{id:"h21",name:"Maintenance Bond & Town Board Acceptance",phase:"Inspections & Acceptance",category:"Town",min:10,avg:21,max:45,dependencies:["h20b"],responsible:"Town Board",notes:"Maintenance bond replaces performance bond. Streets accepted by TB resolution. 2-year maintenance period typical.",confidence:"High",risk:true,risk_desc:"Roads private until TB acceptance. Deficiencies delay acceptance."},
+{id:"h22",name:"Certificate of Occupancy",phase:"Inspections & Acceptance",category:"Town",min:7,avg:14,max:30,dependencies:["h19","h20b"],responsible:"Building Dept",notes:"Per dwelling unit. Requires infrastructure complete or bonded, all inspections passed.",confidence:"High",risk:false,risk_desc:""}
+];
+// Town data: lancaster
+const LT=[
+{id:"l1",name:"Site Feasibility & Due Diligence",phase:"Pre-Application",category:"Applicant",min:14,avg:21,max:45,dependencies:[],responsible:"Applicant / Engineer",notes:"Per §400-38. Check overlay districts §§400-24 to 400-27. No flag lots permitted (§400-38D(3)). Zoning per Ch. 400.",confidence:"High",risk:false,risk_desc:""},
+{id:"l2",name:"Boundary & Topographic Survey",phase:"Pre-Application",category:"Applicant",min:14,avg:30,max:60,dependencies:["l1"],responsible:"NYS Licensed Surveyor",notes:"Required for all submissions. Include wetland delineation, flood zone, existing structures, trees.",confidence:"High",risk:false,risk_desc:""},
+{id:"l3",name:"SEQR EAF Preparation",phase:"Pre-Application",category:"Applicant",min:7,avg:14,max:30,dependencies:["l1"],responsible:"Environmental Consultant",notes:"Per §400-38H(5)(f). EAF prepared concurrent with survey. PB is lead agency for SEQR.",confidence:"High",risk:true,risk_desc:"Full EIS can add 6-18 months."},
+{id:"l4",name:"Sketch Plan Submission (10d Prior to PB)",phase:"Sketch Plan",category:"Applicant",min:7,avg:14,max:30,dependencies:["l1","l2"],responsible:"Applicant",notes:"Per §400-38H(2). 3 copies to Town Clerk 10 days before PB meeting.",confidence:"High",risk:false,risk_desc:""},
+{id:"l5",name:"PB Classification (Minor vs Major)",phase:"Sketch Plan",category:"Town",min:1,avg:7,max:14,dependencies:["l4"],responsible:"Planning Board",notes:"Per §400-38H(3)(b). Minor = 4 lots or fewer, no new road. Major = 5+ lots or new road. PB discusses improvements.",confidence:"High",risk:false,risk_desc:""},
+{id:"l5b",name:"No Flag Lots Design Constraint",phase:"Sketch Plan",category:"Milestone",min:0,avg:0,max:0,dependencies:["l5"],responsible:"Applicant / PE",notes:"Per §400-38D(3). Flag lots explicitly prohibited. Each lot must have direct street frontage. Design constraint that affects lot layout.",confidence:"High",risk:false,risk_desc:""},
+{id:"l6",name:"Preliminary Plat Preparation",phase:"Preliminary Plat",category:"Applicant",min:30,avg:60,max:120,dependencies:["l5","l5b"],responsible:"Applicant / PE",notes:"Per §400-38H(5)(a). 6 copies to Town Clerk 10 days before TB meeting. Full engineering: drainage, roads, utilities per Ch. 206.",confidence:"High",risk:false,risk_desc:""},
+{id:"l7",name:"Submission to Town Clerk",phase:"Preliminary Plat",category:"Applicant",min:1,avg:3,max:10,dependencies:["l6"],responsible:"Applicant",notes:"Per §400-38H(5)(a). 2 copies referred to PB. Clerk distributes to all reviewing departments.",confidence:"High",risk:false,risk_desc:""},
+{id:"l8",name:"PB Review & Modifications (45-Day Clock)",phase:"Planning Board Review",category:"Town",min:21,avg:35,max:45,dependencies:["l7"],responsible:"Planning Board",notes:"Per §400-38H(5)(d). PB notifies applicant of required changes within 45 days. Amended 12-19-2022 per L.L. No. 10-2022.",confidence:"High",risk:false,risk_desc:""},
+{id:"l8b",name:"Agency Referrals — Internal Departments",phase:"Planning Board Review",category:"Town",min:14,avg:21,max:30,dependencies:["l7"],responsible:"Code Enforcement / Engineer",notes:"Town Engineer, Code Enforcement, Highway Dept, Fire District. Concurrent with PB review.",confidence:"High",risk:false,risk_desc:""},
+{id:"l8c",name:"Agency Referrals — Erie County (GML §239)",phase:"Planning Board Review",category:"County",min:20,avg:30,max:45,dependencies:["l7"],responsible:"Erie County DEDP",notes:"Per GML §239-n. 30-day review. Required for county/state road adjacency or municipal boundary.",confidence:"High",risk:false,risk_desc:""},
+{id:"l9",name:"PB SEQR Determination & Public Hearing (62-Day Clock)",phase:"Planning Board Review",category:"Town",min:30,avg:45,max:62,dependencies:["l8","l8b","l8c"],responsible:"Planning Board",notes:"Per §400-38H(5)(f). Hold hearing + SEQR within 62 days of complete application. Resubmission triggers full restart.",confidence:"High",risk:true,risk_desc:"Resubmission of revised plat restarts entire 62-day clock."},
+{id:"l10",name:"PB Recommendation to Town Board",phase:"Planning Board Review",category:"Milestone",min:1,avg:7,max:14,dependencies:["l9"],responsible:"Planning Board",notes:"Per §400-38E(1). PB sends written recommendation within 45 days of PB action. TB waits for PB report.",confidence:"High",risk:false,risk_desc:""},
+{id:"l11",name:"Town Board Decision on Preliminary",phase:"Town Board Review",category:"Town",min:14,avg:30,max:90,dependencies:["l10"],responsible:"Town Board",notes:"Per §400-38H(5)(g). TB acts after PB rec, or after 90 days. TB has SOLE FINAL AUTHORITY. Separate 45/90-day TB clock.",confidence:"High",risk:true,risk_desc:"Separate TB clock. TB can override PB recommendation."},
+{id:"l12",name:"NYSDEC Jurisdictional Determination",phase:"Infrastructure Permitting",category:"State Agency",min:30,avg:90,max:180,dependencies:["l11"],responsible:"NYSDEC Region 9",notes:"2025 expanded wetlands jurisdiction. Required if any wetlands/watercourses on or adjacent to site.",confidence:"Medium",risk:true,risk_desc:"Adds 90-180 days if wetlands present."},
+{id:"l12b",name:"NYSDEC Wetlands Permit (Article 24)",phase:"Infrastructure Permitting",category:"State Agency",min:90,avg:180,max:365,dependencies:["l12"],responsible:"NYSDEC Region 9",notes:"Article 24 ECL. Required for disturbance within mapped wetland or 100-ft adjacent area.",confidence:"Medium",risk:true,risk_desc:"Individual permit 90-365 days."},
+{id:"l12c",name:"USACE Section 404 Permit",phase:"Infrastructure Permitting",category:"Federal",min:60,avg:120,max:365,dependencies:["l11"],responsible:"USACE Buffalo District",notes:"Required for fill in waters of US/wetlands. Nationwide 29 or Individual permit.",confidence:"Medium",risk:true,risk_desc:"Individual permit 6-12+ months."},
+{id:"l13",name:"Erie County Health Dept Approval",phase:"Infrastructure Permitting",category:"County",min:30,avg:60,max:120,dependencies:["l11"],responsible:"Erie County Health",notes:"Sewer extension and water supply plan approval. Required for all major subdivisions.",confidence:"High",risk:false,risk_desc:""},
+{id:"l13b",name:"NYSDOT / Erie County Highway Access Permit",phase:"Infrastructure Permitting",category:"State/County",min:30,avg:60,max:120,dependencies:["l11"],responsible:"NYSDOT / Erie County DPW",notes:"Required for access onto state or county roads. Separate application from PB review. Traffic study if warranted.",confidence:"Medium",risk:true,risk_desc:"NYSDOT reviews 60-180 days. Separate from Town process."},
+{id:"l14",name:"Final Plat Preparation (6-Month Window)",phase:"Final Plat",category:"Applicant",min:30,avg:60,max:180,dependencies:["l11"],responsible:"Applicant / PE",notes:"Per §400-38H(6)(a). Within 6 months of preliminary approval. Otherwise treated as revised plat (full restart).",confidence:"High",risk:true,risk_desc:"6-month window. Late submission = treated as new application."},
+{id:"l15",name:"TB Public Hearing on Final Plat (45d)",phase:"Final Plat",category:"Town",min:14,avg:30,max:45,dependencies:["l14"],responsible:"Town Board",notes:"Per §400-38H(6)(d). Within 45 days. 5-day newspaper notice.",confidence:"High",risk:false,risk_desc:""},
+{id:"l16",name:"TB Action on Final Plat (45d Post-Hearing)",phase:"Final Plat",category:"Town",min:14,avg:30,max:45,dependencies:["l15"],responsible:"Town Board",notes:"Per §400-38H(6)(e). Within 45 days after hearing close. Failure to act = deemed approval.",confidence:"High",risk:false,risk_desc:""},
+{id:"l17",name:"Erie County Clerk Filing",phase:"Final Plat",category:"Milestone",min:3,avg:7,max:14,dependencies:["l16"],responsible:"Applicant",notes:"Filed with Erie County Clerk. Within 62 days of TB Chair signature.",confidence:"High",risk:false,risk_desc:""},
+{id:"l18",name:"PIP Permit & Construction Drawings",phase:"Construction Permitting",category:"Town",min:14,avg:30,max:60,dependencies:["l17"],responsible:"Town Engineer",notes:"Per §400-38G(3). Ch. 206 Public Improvements specifications. Notify Town 5 days before start.",confidence:"High",risk:false,risk_desc:""},
+{id:"l18b",name:"Performance Bond",phase:"Construction Permitting",category:"Applicant",min:7,avg:21,max:45,dependencies:["l17"],responsible:"Bonding Company",notes:"Per NYS Town Law §277. Bond = estimated cost of all improvements.",confidence:"High",risk:false,risk_desc:""},
+{id:"l18c",name:"Building Permits",phase:"Construction Permitting",category:"Town",min:7,avg:14,max:30,dependencies:["l18"],responsible:"Code Enforcement",notes:"Individual lot permits. After PIP and County Clerk filing.",confidence:"High",risk:false,risk_desc:""},
+{id:"l19",name:"Site Clearing & Erosion Control",phase:"Construction",category:"Applicant",min:14,avg:30,max:60,dependencies:["l18"],responsible:"General Contractor",notes:"SPDES GP-0-24-001. Erosion/sediment control per SWPPP. PE supervision per §400-38G(4)(a).",confidence:"High",risk:false,risk_desc:""},
+{id:"l19b",name:"Underground Utilities (Water & Sewer)",phase:"Construction",category:"Applicant",min:30,avg:60,max:120,dependencies:["l19"],responsible:"Utility Contractors",notes:"Per Ch. 206 Lancaster General Specifications. Sewer before road base. Pressure/leak testing.",confidence:"High",risk:false,risk_desc:""},
+{id:"l19c",name:"Drainage & Stormwater Construction",phase:"Construction",category:"Applicant",min:21,avg:45,max:90,dependencies:["l19"],responsible:"Utility Contractors",notes:"Storm sewer, detention/retention per approved SWPPP and Ch. 206 specs.",confidence:"High",risk:false,risk_desc:""},
+{id:"l19d",name:"Road Construction (Base & Paving)",phase:"Construction",category:"Applicant",min:30,avg:60,max:120,dependencies:["l19b","l19c"],responsible:"Paving Contractor",notes:"Per Ch. 206 specifications. Subbase, base, binder, top course. PE supervision per §400-38G(4)(a).",confidence:"High",risk:false,risk_desc:""},
+{id:"l19e",name:"Sidewalks, Curbs & Monuments",phase:"Construction",category:"Applicant",min:14,avg:30,max:60,dependencies:["l19d"],responsible:"Contractor / Surveyor",notes:"ADA curb ramps. Iron monuments per survey. Street name signs.",confidence:"High",risk:false,risk_desc:""},
+{id:"l20",name:"Vertical Construction (Homes)",phase:"Construction",category:"Applicant",min:120,avg:180,max:365,dependencies:["l19d","l18c"],responsible:"Builder",notes:"April-November primary season. No flag lots = all lots have street frontage.",confidence:"Medium",risk:true,risk_desc:"WNY winters (92\" avg snow). Construction season April-November."},
+{id:"l21",name:"Town Engineer Inspections (Ongoing)",phase:"Inspections & Acceptance",category:"Town",min:0,avg:0,max:0,dependencies:["l19"],responsible:"Town Engineer",notes:"Per §400-38G(4). Ongoing PE supervision required. Electronic + paper certified plans.",confidence:"High",risk:false,risk_desc:""},
+{id:"l21b",name:"PE As-Built Certification",phase:"Inspections & Acceptance",category:"Applicant",min:14,avg:30,max:60,dependencies:["l19e","l19b"],responsible:"Registered PE",notes:"Per §400-38G(4)(a). Certified as-built plans for all infrastructure.",confidence:"High",risk:false,risk_desc:""},
+{id:"l22",name:"Maintenance Bond (40%) & Town Board Acceptance",phase:"Inspections & Acceptance",category:"Town",min:10,avg:21,max:45,dependencies:["l21b"],responsible:"Town Board / Engineer",notes:"Per §400-38G(4)(f). 2-year maintenance period. 40% bond per Ch. 206 — higher than typical 25%.",confidence:"High",risk:true,risk_desc:"40% maintenance bond is higher than typical 25%. Deficiencies delay acceptance."},
+{id:"l23",name:"Certificate of Occupancy",phase:"Inspections & Acceptance",category:"Town",min:7,avg:14,max:30,dependencies:["l20","l21b"],responsible:"Code Enforcement",notes:"Per dwelling. Requires infrastructure complete or bonded, all inspections passed.",confidence:"High",risk:false,risk_desc:""}
+];
+// Town data: orchardpark
+const OT=[
+{id:"o1",name:"Site Feasibility & Due Diligence",phase:"Pre-Application",category:"Applicant",min:14,avg:21,max:45,dependencies:[],responsible:"Applicant / Engineer",notes:"Per §121-4. Erie County Health consultation advised early. Check Conservation Board overlay areas.",confidence:"High",risk:false,risk_desc:""},
+{id:"o2",name:"Boundary & Topographic Survey",phase:"Pre-Application",category:"Applicant",min:14,avg:30,max:60,dependencies:["o1"],responsible:"NYS Licensed Surveyor",notes:"Contours, existing improvements, wetland delineation, floodplain, tree survey.",confidence:"High",risk:false,risk_desc:""},
+{id:"o3",name:"SEQR EAF Preparation",phase:"Pre-Application",category:"Applicant",min:7,avg:14,max:30,dependencies:["o1"],responsible:"Environmental Consultant",notes:"EAF prepared concurrent with survey. PB is lead agency for SEQR in Orchard Park.",confidence:"High",risk:true,risk_desc:"Full EIS can add 6-18 months if Positive Declaration."},
+{id:"o4",name:"Pre-Application Sketch Plan Presentation",phase:"Sketch Plan",category:"Applicant",min:14,avg:21,max:45,dependencies:["o1","o2"],responsible:"Applicant / Engineer",notes:"Per §121-5. Sketch form: total area, zoning, phasing, title, wetlands, topo, aerial photo.",confidence:"High",risk:false,risk_desc:""},
+{id:"o5",name:"PB Recommendations & Dev Forms Issued",phase:"Sketch Plan",category:"Town",min:7,avg:14,max:30,dependencies:["o4"],responsible:"Planning Board",notes:"Per §121-6. Written recommendations on zoning, access, recreation, drainage. Development Forms package provided to applicant.",confidence:"High",risk:false,risk_desc:""},
+{id:"o5b",name:"Conservation Board Review",phase:"Sketch Plan",category:"Town",min:14,avg:21,max:45,dependencies:["o4"],responsible:"Conservation Board",notes:"Advisory review of environmental features, tree preservation, open space, wetland buffers. May recommend conditions.",confidence:"High",risk:false,risk_desc:""},
+{id:"o6",name:"Preliminary Plat Preparation",phase:"Preliminary Plat",category:"Applicant",min:30,avg:60,max:120,dependencies:["o5","o5b"],responsible:"Applicant / PE",notes:"Per §121-7. 8 sets required. Cover sheet signed by Highway Supt & Town Engineer. Full engineering.",confidence:"High",risk:false,risk_desc:""},
+{id:"o7",name:"Preliminary Plat Submission & Distribution",phase:"Preliminary Plat",category:"Town",min:5,avg:10,max:14,dependencies:["o6"],responsible:"PB Clerk",notes:"Per §121-8. Distributed to: Building Dept, PB (3 copies), Engineering (2), Highway Dept, Conservation Board.",confidence:"High",risk:false,risk_desc:""},
+{id:"o7b",name:"Agency Referrals — Erie County (GML §239)",phase:"Preliminary Plat",category:"County",min:20,avg:30,max:45,dependencies:["o7"],responsible:"Erie County DEDP",notes:"Per GML §239-n. 30-day county review. Required for state/county road adjacency.",confidence:"High",risk:false,risk_desc:""},
+{id:"o8",name:"Public Hearing (62-Day Clock #1)",phase:"Public Hearing",category:"Town",min:14,avg:30,max:62,dependencies:["o7","o7b"],responsible:"Planning Board",notes:"Per §121-9. FIRST 62-day clock: hearing within 62 days of receipt. 5-day newspaper notice.",confidence:"High",risk:true,risk_desc:"First of three separate 62-day statutory clocks."},
+{id:"o9",name:"PB Action Post-Hearing (62-Day Clock #2)",phase:"Preliminary Plat",category:"Town",min:14,avg:30,max:62,dependencies:["o8"],responsible:"Planning Board",notes:"Per §121-10. SECOND 62-day clock: PB acts within 62 days after close of hearing. Failure to act = deemed approval.",confidence:"High",risk:true,risk_desc:"Second 62-day clock. Tight statutory deadline."},
+{id:"o10",name:"Preliminary Conditional Approval",phase:"Preliminary Plat",category:"Milestone",min:0,avg:7,max:14,dependencies:["o9"],responsible:"PB Chairman",notes:"Per §121-11. Chairman signs approved plat + all development forms.",confidence:"High",risk:false,risk_desc:""},
+{id:"o11",name:"Petition TB for Districts (Rezoning/Sewer/Water)",phase:"Town Board Review",category:"Applicant",min:14,avg:30,max:60,dependencies:["o10"],responsible:"Applicant",notes:"Per §121-12. Petition for rezoning, sewer district, storm district, water district as needed. Each requires separate TB hearing.",confidence:"High",risk:true,risk_desc:"District creation requires TB hearing. Multiple districts = multiple hearings."},
+{id:"o12",name:"NYSDEC Jurisdictional Determination",phase:"Infrastructure Permitting",category:"State Agency",min:30,avg:90,max:180,dependencies:["o10"],responsible:"NYSDEC Region 9",notes:"2025 expanded wetlands jurisdiction. Required if any wetlands/watercourses on or adjacent to site.",confidence:"Medium",risk:true,risk_desc:"Adds 90-180 days if wetlands present."},
+{id:"o12b",name:"NYSDEC Wetlands Permit (Article 24)",phase:"Infrastructure Permitting",category:"State Agency",min:90,avg:180,max:365,dependencies:["o12"],responsible:"NYSDEC Region 9",notes:"Article 24 ECL. Required for disturbance within mapped wetland or 100-ft adjacent area.",confidence:"Medium",risk:true,risk_desc:"Individual permit 90-365 days."},
+{id:"o12c",name:"USACE Section 404 Permit",phase:"Infrastructure Permitting",category:"Federal",min:60,avg:120,max:365,dependencies:["o10"],responsible:"USACE Buffalo District",notes:"Required for fill in waters of US/wetlands. Nationwide 29 or Individual permit.",confidence:"Medium",risk:true,risk_desc:"Individual permit 6-12+ months."},
+{id:"o13",name:"Erie County Health Dept Approval",phase:"Infrastructure Permitting",category:"County",min:30,avg:60,max:120,dependencies:["o10"],responsible:"Erie County Health",notes:"Per §121-4. Required for 5+ lot subdivisions. Sanitary sewer and water supply approval.",confidence:"High",risk:false,risk_desc:""},
+{id:"o13b",name:"Ch. 144 Stormwater Management Plan",phase:"Infrastructure Permitting",category:"Town",min:14,avg:30,max:60,dependencies:["o10"],responsible:"Town Engineer / Stormwater Mgr",notes:"Per Ch. 144 Stormwater Management. SWPPP required for >1 acre disturbance. Separate from subdivision approval.",confidence:"High",risk:false,risk_desc:""},
+{id:"o14",name:"Final Plat Preparation (6-Month Window)",phase:"Final Plat",category:"Applicant",min:30,avg:60,max:180,dependencies:["o10","o11"],responsible:"Applicant / PE",notes:"Per §121-13. Form 3 + 3 linens + metes/bounds + fee. PB may refuse if >6 months from preliminary.",confidence:"High",risk:true,risk_desc:"6-month window from preliminary approval. Late = PB can refuse."},
+{id:"o15",name:"Obtain Dev Form 3 Approvals (All Agencies)",phase:"Final Plat",category:"Applicant",min:14,avg:30,max:60,dependencies:["o14"],responsible:"Applicant",notes:"Per §121-14. ALL Form 3 agency approvals must be obtained before PB submission. Highway Supt, Town Engineer, Health Dept, Conservation Board, Building Inspector each sign individually.",confidence:"High",risk:true,risk_desc:"Multiple agency sign-offs required. Any single holdout delays submission."},
+{id:"o16",name:"Final Plat PB Hearing",phase:"Final Plat",category:"Town",min:14,avg:21,max:45,dependencies:["o15"],responsible:"Planning Board",notes:"Per §121-15. Compare final with approved preliminary. Verify all conditions met.",confidence:"High",risk:false,risk_desc:""},
+{id:"o17",name:"TB Review of Final Plat",phase:"Town Board Review",category:"Town",min:7,avg:14,max:30,dependencies:["o16"],responsible:"Town Board",notes:"Per §121-16. TB may make recommendations to PB. Advisory role at final stage.",confidence:"High",risk:false,risk_desc:""},
+{id:"o18",name:"Final Plat Approval (62-Day Clock #3)",phase:"Final Plat",category:"Town",min:14,avg:30,max:62,dependencies:["o16","o17"],responsible:"Planning Board",notes:"Per §121-17. THIRD 62-day clock: within 62 days after final hearing. Three overlapping 62-day clocks = aggressive timeline.",confidence:"High",risk:true,risk_desc:"Third of three 62-day clocks. Failure to act = deemed approval."},
+{id:"o19",name:"TB Representative Signing & County Clerk Filing",phase:"Final Plat",category:"Milestone",min:5,avg:10,max:21,dependencies:["o18"],responsible:"TB Representative / Applicant",notes:"Per §121-18/19. TB representative signs linens. Applicant records with Erie County Clerk.",confidence:"High",risk:false,risk_desc:""},
+{id:"o20",name:"PIP Permit & Construction Drawings",phase:"Construction Permitting",category:"Town",min:14,avg:30,max:60,dependencies:["o19"],responsible:"Town Engineer",notes:"Public Improvement Permit with approved construction drawings. Per NYS Town Law §277.",confidence:"High",risk:false,risk_desc:""},
+{id:"o20b",name:"Performance Bond",phase:"Construction Permitting",category:"Applicant",min:7,avg:21,max:45,dependencies:["o19"],responsible:"Bonding Company",notes:"Per NYS Town Law §277. Bond = estimated cost of all public improvements.",confidence:"High",risk:false,risk_desc:""},
+{id:"o20c",name:"Building Permits",phase:"Construction Permitting",category:"Town",min:7,avg:14,max:30,dependencies:["o20"],responsible:"Building Inspector",notes:"Individual lot permits. After PIP and County Clerk filing.",confidence:"High",risk:false,risk_desc:""},
+{id:"o21",name:"Site Clearing & Erosion Control",phase:"Construction",category:"Applicant",min:14,avg:30,max:60,dependencies:["o20"],responsible:"General Contractor",notes:"SPDES GP-0-24-001. Silt fence, inlet protection. Tree preservation per Conservation Board conditions.",confidence:"High",risk:false,risk_desc:""},
+{id:"o21b",name:"Underground Utilities (Water & Sewer)",phase:"Construction",category:"Applicant",min:30,avg:60,max:120,dependencies:["o21"],responsible:"Utility Contractors",notes:"Per Erie County Health specs. Sewer before road base. Pressure/leak testing.",confidence:"High",risk:false,risk_desc:""},
+{id:"o21c",name:"Drainage & Stormwater Construction",phase:"Construction",category:"Applicant",min:21,avg:45,max:90,dependencies:["o21"],responsible:"Utility Contractors",notes:"Per Ch. 144 Stormwater Management. Storm sewer, detention/retention per approved SWPPP.",confidence:"High",risk:false,risk_desc:""},
+{id:"o21d",name:"Road Construction (Base & Paving)",phase:"Construction",category:"Applicant",min:30,avg:60,max:120,dependencies:["o21b","o21c"],responsible:"Paving Contractor",notes:"Per approved plans. Subbase, base, binder, wearing course. April-November paving season.",confidence:"High",risk:false,risk_desc:""},
+{id:"o21e",name:"Sidewalks, Curbs & Monuments",phase:"Construction",category:"Applicant",min:14,avg:30,max:60,dependencies:["o21d"],responsible:"Contractor / Surveyor",notes:"ADA curb ramps. Iron pin monuments. Street name signs.",confidence:"High",risk:false,risk_desc:""},
+{id:"o22",name:"Vertical Construction (Homes)",phase:"Construction",category:"Applicant",min:120,avg:180,max:365,dependencies:["o21d","o20c"],responsible:"Builder",notes:"Per individual lot building permits. WNY climate: April-November primary season.",confidence:"Medium",risk:true,risk_desc:"WNY winters (92\" avg snow). Construction season April-November."},
+{id:"o23",name:"Town Engineer Inspections (Ongoing)",phase:"Inspections & Acceptance",category:"Town",min:0,avg:0,max:0,dependencies:["o21"],responsible:"Town Engineer / Highway",notes:"Ongoing during all construction phases. Inspection costs borne by developer.",confidence:"High",risk:false,risk_desc:""},
+{id:"o23b",name:"PE As-Built Certification",phase:"Inspections & Acceptance",category:"Applicant",min:14,avg:30,max:60,dependencies:["o21e","o21b"],responsible:"Registered PE",notes:"Certified as-built plans for all infrastructure. Required before maintenance bond and TB acceptance.",confidence:"High",risk:false,risk_desc:""},
+{id:"o24",name:"Maintenance Bond & Town Board Acceptance",phase:"Inspections & Acceptance",category:"Town",min:10,avg:21,max:45,dependencies:["o23b"],responsible:"Town Board",notes:"Maintenance bond replaces performance bond. TB resolution to accept roads/infrastructure. 2-year maintenance period.",confidence:"High",risk:true,risk_desc:"Roads private until TB acceptance. Deficiencies delay acceptance."},
+{id:"o25",name:"Certificate of Occupancy",phase:"Inspections & Acceptance",category:"Town",min:7,avg:14,max:30,dependencies:["o22","o23b"],responsible:"Building Inspector",notes:"Per dwelling. Requires infrastructure complete or bonded, all inspections passed.",confidence:"High",risk:false,risk_desc:""}
+];
+// Town data: pendleton
+const PT=[
+{id:"p1",name:"Site Feasibility & Due Diligence",phase:"Pre-Application",category:"Applicant",min:14,avg:21,max:45,dependencies:[],responsible:"Applicant / Engineer",notes:"Zoning per Ch. 247. NOTE: Niagara County (not Erie). Niagara County Health for septic/water if not municipal.",confidence:"High",risk:false,risk_desc:""},
+{id:"p2",name:"Boundary & Topographic Survey",phase:"Pre-Application",category:"Applicant",min:14,avg:30,max:60,dependencies:["p1"],responsible:"NYS Licensed Surveyor",notes:"Per §220-17. Scale ≤400 ft/inch. Show lots, streets, drainage, wetlands, structures, contours.",confidence:"High",risk:false,risk_desc:""},
+{id:"p3",name:"SEQR EAF Preparation",phase:"Pre-Application",category:"Applicant",min:7,avg:14,max:30,dependencies:["p1"],responsible:"Environmental Consultant",notes:"EAF Part 1. PB is lead agency for SEQR. Short or Full form based on acreage/Type I thresholds.",confidence:"High",risk:true,risk_desc:"Full EIS can add 6-18 months if Positive Declaration."},
+{id:"p4",name:"Sketch Plan Submission",phase:"Sketch Plan",category:"Applicant",min:3,avg:7,max:14,dependencies:["p2","p3"],responsible:"Applicant",notes:"Per §220-17A. Submit to Administrative Assistant. Include sketch, EAF, application fee.",confidence:"High",risk:false,risk_desc:""},
+{id:"p5",name:"PB Sketch Review & Classification",phase:"Sketch Plan",category:"Town",min:14,avg:30,max:45,dependencies:["p4"],responsible:"Planning Board",notes:"Classifies minor (≤4 lots, no road) vs major. Monthly meetings typical. Reviews lot layout, drainage concept, access.",confidence:"High",risk:true,risk_desc:"Monthly PB = up to 30-day wait for next meeting."},
+{id:"p6",name:"Preliminary Plat Preparation",phase:"Preliminary Plat",category:"Applicant",min:30,avg:60,max:120,dependencies:["p5"],responsible:"Applicant / PE",notes:"Per §220-19. 14 copies at ≤100 ft/inch. Show contours, utilities, drainage plan, road profiles, cross-sections.",confidence:"High",risk:false,risk_desc:""},
+{id:"p6b",name:"Ch. 247 Stormwater Management Plan",phase:"Preliminary Plat",category:"Applicant",min:14,avg:30,max:60,dependencies:["p5"],responsible:"Applicant / PE",notes:"Per Ch. 247 Art. XIII Stormwater Management. SWPPP required for >1 acre disturbance. Submitted with preliminary.",confidence:"High",risk:false,risk_desc:""},
+{id:"p7",name:"SEQR Determination",phase:"Preliminary Plat",category:"Town",min:14,avg:30,max:60,dependencies:["p6"],responsible:"Planning Board",notes:"Per NYS Town Law §276. Neg Dec continues; Pos Dec triggers full EIS process.",confidence:"High",risk:true,risk_desc:"Positive Declaration triggers full EIS (6-18+ months)."},
+{id:"p7b",name:"Agency Referrals — Internal",phase:"Preliminary Plat",category:"Town",min:14,avg:21,max:30,dependencies:["p6"],responsible:"Code Enforcement / Highway",notes:"Highway Superintendent, Code Enforcement, Town Engineer. Concurrent with SEQR.",confidence:"High",risk:false,risk_desc:""},
+{id:"p7c",name:"Agency Referrals — Niagara County (GML §239)",phase:"Preliminary Plat",category:"County",min:20,avg:30,max:45,dependencies:["p6"],responsible:"Niagara County Planning",notes:"Per GML §239-n. 30-day county review. NOTE: Niagara County, not Erie.",confidence:"High",risk:false,risk_desc:""},
+{id:"p8",name:"Preliminary Plat PB Review (62-Day Clock)",phase:"Preliminary Plat",category:"Town",min:14,avg:30,max:62,dependencies:["p7","p7b","p7c"],responsible:"Planning Board",notes:"Per NYS Town Law §276. 62-day statutory clock from complete application.",confidence:"High",risk:false,risk_desc:""},
+{id:"p9",name:"Public Hearing",phase:"Public Hearing",category:"Town",min:14,avg:21,max:45,dependencies:["p8"],responsible:"Planning Board",notes:"Per NYS Town Law §276. 5-day newspaper notice. SEQR determination must precede or be concurrent.",confidence:"High",risk:false,risk_desc:""},
+{id:"p9b",name:"Preliminary Approval",phase:"Preliminary Plat",category:"Milestone",min:0,avg:7,max:14,dependencies:["p9"],responsible:"Planning Board",notes:"Conditions of approval attached. 6-month validity for final plat submission.",confidence:"High",risk:false,risk_desc:""},
+{id:"p10",name:"NYSDEC Jurisdictional Determination",phase:"Infrastructure Permitting",category:"State Agency",min:30,avg:90,max:180,dependencies:["p9b"],responsible:"NYSDEC Region 9",notes:"2025 expanded wetlands jurisdiction. Required if any wetlands/watercourses on or adjacent to site.",confidence:"Medium",risk:true,risk_desc:"Adds 90-180 days if wetlands present."},
+{id:"p10b",name:"NYSDEC Wetlands Permit (Article 24)",phase:"Infrastructure Permitting",category:"State Agency",min:90,avg:180,max:365,dependencies:["p10"],responsible:"NYSDEC Region 9",notes:"Article 24 ECL. Required for disturbance within mapped wetland or 100-ft adjacent area.",confidence:"Medium",risk:true,risk_desc:"Individual permit 90-365 days."},
+{id:"p10c",name:"Niagara County Health Dept Approval",phase:"Infrastructure Permitting",category:"County",min:30,avg:60,max:120,dependencies:["p9b"],responsible:"Niagara County Health",notes:"Required for water/sewer approval. NOTE: Niagara County jurisdiction, not Erie.",confidence:"High",risk:false,risk_desc:""},
+{id:"p11",name:"Final Plat Preparation",phase:"Final Plat",category:"Applicant",min:21,avg:45,max:90,dependencies:["p9b"],responsible:"Applicant / PE",notes:"Per §220-20. Ink on linen/Mylar. Include monument locations per Highway Supt determination.",confidence:"High",risk:false,risk_desc:""},
+{id:"p11b",name:"Monument Setting (Per Highway Supt)",phase:"Final Plat",category:"Applicant",min:7,avg:14,max:30,dependencies:["p11"],responsible:"NYS Licensed Surveyor",notes:"Per §220-20A(7). Highway Superintendent determines monument locations. Iron pins at all lot corners and angle points.",confidence:"High",risk:false,risk_desc:""},
+{id:"p11c",name:"Traffic Sign Plan & Cost Allocation",phase:"Final Plat",category:"Applicant",min:7,avg:14,max:21,dependencies:["p11"],responsible:"Applicant / Highway Supt",notes:"Per §220-20A(8). Street name signs, stop signs, speed limit signs. Developer bears cost of all traffic signage.",confidence:"High",risk:false,risk_desc:""},
+{id:"p12",name:"Final Plat PB Approval (62-Day Clock)",phase:"Final Plat",category:"Town",min:14,avg:30,max:62,dependencies:["p11","p11b","p11c"],responsible:"Planning Board",notes:"Per NYS Town Law §276. 62-day statutory clock. Failure to act = deemed approval.",confidence:"High",risk:false,risk_desc:""},
+{id:"p12b",name:"Niagara County Clerk Filing",phase:"Final Plat",category:"Milestone",min:3,avg:7,max:14,dependencies:["p12"],responsible:"Applicant",notes:"Filed with Niagara County Clerk. Within 62 days of PB Chair signature.",confidence:"High",risk:false,risk_desc:""},
+{id:"p13",name:"Construction Permits & Bond",phase:"Construction Permitting",category:"Town",min:14,avg:21,max:45,dependencies:["p12b"],responsible:"Code Enforcement / Highway",notes:"Per §220-20B. Approved construction drawings. Performance bond per NYS Town Law §277.",confidence:"High",risk:false,risk_desc:""},
+{id:"p13b",name:"Building Permits",phase:"Construction Permitting",category:"Town",min:7,avg:14,max:30,dependencies:["p13"],responsible:"Code Enforcement",notes:"Individual lot permits. After filing and construction permit.",confidence:"High",risk:false,risk_desc:""},
+{id:"p14",name:"Site Clearing & Erosion Control",phase:"Construction",category:"Applicant",min:14,avg:30,max:60,dependencies:["p13"],responsible:"General Contractor",notes:"SPDES GP-0-24-001. Erosion/sediment control per Ch. 247 SWPPP requirements.",confidence:"High",risk:false,risk_desc:""},
+{id:"p14b",name:"Underground Utilities (Water & Sewer)",phase:"Construction",category:"Applicant",min:30,avg:60,max:120,dependencies:["p14"],responsible:"Utility Contractors",notes:"Per Niagara County Health specs. Sewer before road base. Pressure/leak testing.",confidence:"High",risk:false,risk_desc:""},
+{id:"p14c",name:"Drainage Construction",phase:"Construction",category:"Applicant",min:21,avg:45,max:90,dependencies:["p14"],responsible:"Utility Contractors",notes:"Per §220-18D. Storm sewer, detention/retention. Drainage must be accepted before any CO issued.",confidence:"High",risk:true,risk_desc:"Per §220-18D — no CO until drainage accepted by Town."},
+{id:"p14d",name:"Road Construction (Base & Paving)",phase:"Construction",category:"Applicant",min:30,avg:60,max:120,dependencies:["p14b","p14c"],responsible:"Paving Contractor",notes:"Per approved plans. Subbase, base, binder, wearing course.",confidence:"High",risk:false,risk_desc:""},
+{id:"p14e",name:"Sidewalks, Curbs, Signs & Monuments",phase:"Construction",category:"Applicant",min:14,avg:30,max:60,dependencies:["p14d"],responsible:"Contractor / Surveyor",notes:"ADA curb ramps. Traffic signs per §220-20A(8) — developer cost. Monuments per Highway Supt.",confidence:"High",risk:false,risk_desc:""},
+{id:"p15",name:"Vertical Construction (Homes)",phase:"Construction",category:"Applicant",min:120,avg:180,max:365,dependencies:["p14d","p13b"],responsible:"Builder",notes:"Per individual lot building permits. WNY climate: April-November primary season.",confidence:"Medium",risk:true,risk_desc:"WNY winters. November frost deadline."},
+{id:"p16",name:"Town Engineer / Highway Inspections (Ongoing)",phase:"Inspections & CO",category:"Town",min:0,avg:0,max:0,dependencies:["p14"],responsible:"Code Enforcement / Engineer",notes:"Ongoing during construction. Highway Supt inspects road and drainage construction.",confidence:"High",risk:false,risk_desc:""},
+{id:"p16b",name:"PE As-Built Certification",phase:"Inspections & CO",category:"Applicant",min:14,avg:30,max:60,dependencies:["p14e","p14b"],responsible:"Registered PE",notes:"Certified as-built plans for all infrastructure. Required for drainage acceptance.",confidence:"High",risk:false,risk_desc:""},
+{id:"p17",name:"Drainage Acceptance (Required Before CO)",phase:"Inspections & CO",category:"Town",min:7,avg:14,max:30,dependencies:["p16b"],responsible:"Town Engineer / Highway",notes:"Per §220-18D. No Certificate of Occupancy until drainage system accepted by Town.",confidence:"High",risk:true,risk_desc:"Drainage acceptance gates ALL certificates of occupancy."},
+{id:"p18",name:"Certificate of Occupancy (or Temp 120-Day)",phase:"Inspections & CO",category:"Town",min:7,avg:14,max:30,dependencies:["p15","p17"],responsible:"Code Enforcement",notes:"Per §220-18E. Temp CO max 120 days if weather prohibits completion. Must convert to permanent or revoke.",confidence:"High",risk:true,risk_desc:"120-day temp CO — must convert to permanent. Revoked if conditions not met."}
+];
+// Town data: wheatfield
+const WT=[
+{id:"w1",name:"Site Feasibility & Due Diligence",phase:"Pre-Application",category:"Applicant",min:14,avg:21,max:45,dependencies:[],responsible:"Applicant / Engineer",notes:"Zoning per Ch. 200. Greenspace Master Plan. Niagara County. Conservation areas per §200-46.",confidence:"High",risk:false,risk_desc:""},
+{id:"w2",name:"Boundary & Topographic Survey",phase:"Pre-Application",category:"Applicant",min:14,avg:30,max:60,dependencies:["w1"],responsible:"NYS Licensed Surveyor",notes:"Per §200-47.2B. Include: boundaries, streams, wetlands, topo, soils, roads, 100-year floodplain.",confidence:"High",risk:false,risk_desc:""},
+{id:"w2b",name:"Resource Inventory / Base Map",phase:"Pre-Application",category:"Applicant",min:14,avg:21,max:45,dependencies:["w2"],responsible:"Environmental Consultant",notes:"Per §200-47.2B. Environmental suitability inventory: vegetation, trees (6\" caliper+), wildlife corridors, prime ag soils, scenic views.",confidence:"High",risk:false,risk_desc:""},
+{id:"w3",name:"Standard Subdivision Layout",phase:"Sketch Plan",category:"Applicant",min:14,avg:30,max:60,dependencies:["w2b"],responsible:"Applicant / PE",notes:"Per §200-47.2B. FIRST required layout: standard subdivision per underlying zoning district. Conventional lot sizes.",confidence:"High",risk:false,risk_desc:""},
+{id:"w3b",name:"Conservation/Cluster Layout",phase:"Sketch Plan",category:"Applicant",min:14,avg:30,max:60,dependencies:["w2b"],responsible:"Applicant / PE",notes:"Per §200-47.2B. SECOND required layout: conservation/cluster design. ≥40% open space. Development envelopes per §200-47.2E.",confidence:"High",risk:false,risk_desc:""},
+{id:"w4",name:"SEQR EAF Preparation",phase:"Sketch Plan",category:"Applicant",min:7,avg:14,max:30,dependencies:["w3","w3b"],responsible:"Environmental Consultant",notes:"EAF Part 1. TB is lead agency for conservation/cluster SEQR per §200-47.1G.",confidence:"High",risk:true,risk_desc:"Full EIS can add 6-18 months. TB-led coordinated review."},
+{id:"w5",name:"Sketch Plan Submission (Wed Noon, 1 Wk Prior)",phase:"Sketch Plan",category:"Applicant",min:1,avg:3,max:7,dependencies:["w3","w3b","w4"],responsible:"Applicant",notes:"Due 12:00 PM Wednesday, 1 week before PB meeting. 5 copies + fee + EAF. BOTH layouts required.",confidence:"High",risk:true,risk_desc:"Strict Wednesday noon deadline. Miss = wait for next monthly meeting."},
+{id:"w6",name:"PB Review of Both Layouts",phase:"Sketch Plan",category:"Town",min:14,avg:30,max:60,dependencies:["w5"],responsible:"Planning Board",notes:"Per §200-47.1B/C. PB reviews both standard and cluster layouts. Preliminary lot count determination.",confidence:"High",risk:false,risk_desc:""},
+{id:"w6b",name:"Greenspace Focus Group Consultation",phase:"Sketch Plan",category:"Town",min:7,avg:21,max:45,dependencies:["w5"],responsible:"Greenspace Focus Group",notes:"Per §200-47.1B. Advisory consultation. May recommend open space priorities, trail connections, preservation areas. May require multiple rounds.",confidence:"High",risk:false,risk_desc:""},
+{id:"w7",name:"Public Information Meeting",phase:"Sketch Plan",category:"Town",min:7,avg:14,max:30,dependencies:["w6","w6b"],responsible:"Planning Board",notes:"Per §200-47.1D. After applicant responds to PB and Focus Group comments. Neighborhood input.",confidence:"High",risk:false,risk_desc:""},
+{id:"w8",name:"PB Recommendation → TB Authorization",phase:"Sketch Plan",category:"Town",min:14,avg:21,max:45,dependencies:["w7"],responsible:"PB → Town Board",notes:"Per §200-47.1E/F. PB recommends; TB decides whether to authorize cluster design. TB can reject at any time.",confidence:"High",risk:true,risk_desc:"TB can reject cluster design. Applicant may need to revert to standard subdivision."},
+{id:"w9",name:"Preliminary Plat Preparation",phase:"Preliminary Plat",category:"Applicant",min:30,avg:60,max:120,dependencies:["w8"],responsible:"Applicant / PE",notes:"Per PB Form #4. Development envelopes, building footprints, open spaces per §200-47.2E. Full engineering.",confidence:"High",risk:false,risk_desc:""},
+{id:"w9b",name:"Ch. 164 Stormwater Management Plan",phase:"Preliminary Plat",category:"Applicant",min:14,avg:30,max:60,dependencies:["w8"],responsible:"Applicant / PE",notes:"Per Ch. 164 (L.L. No. 9-2007). SWPPP required for all land development subject to PB review. Stormwater Management Officer reviews.",confidence:"High",risk:false,risk_desc:""},
+{id:"w10",name:"SEQR Coordinated Review (TB Lead)",phase:"Preliminary Plat",category:"Town",min:20,avg:45,max:90,dependencies:["w9"],responsible:"Town Board (Lead Agency)",notes:"Per §200-47.1G. TB begins coordinated SEQR. Refers back to PB for technical review. Dual-board process.",confidence:"High",risk:true,risk_desc:"Coordinated SEQR with TB as lead adds time. Dual-board complexity."},
+{id:"w10b",name:"Agency Referrals — Internal",phase:"Preliminary Plat",category:"Town",min:14,avg:21,max:30,dependencies:["w9"],responsible:"Building Dept / Highway / Engineer",notes:"Per Ch. 169. Building Inspector, Highway Supt, Town Engineer review for compliance.",confidence:"High",risk:false,risk_desc:""},
+{id:"w10c",name:"Agency Referrals — Niagara County (GML §239)",phase:"Preliminary Plat",category:"County",min:20,avg:30,max:45,dependencies:["w9"],responsible:"Niagara County Planning",notes:"Per GML §239-n. 30-day county review. NOTE: Niagara County, not Erie.",confidence:"High",risk:false,risk_desc:""},
+{id:"w11",name:"PB Review & Recommendation",phase:"Preliminary Plat",category:"Town",min:14,avg:30,max:62,dependencies:["w10","w10b","w10c"],responsible:"Planning Board",notes:"Per §200-47.1H and Ch. 169. PB recommends approval/denial to TB.",confidence:"High",risk:false,risk_desc:""},
+{id:"w12",name:"Public Hearing (TB)",phase:"Public Hearing",category:"Town",min:14,avg:21,max:45,dependencies:["w11"],responsible:"Town Board",notes:"Per Ch. 169 procedures. TB has subdivision approval authority per §200-96.",confidence:"High",risk:false,risk_desc:""},
+{id:"w12b",name:"Preliminary Approval",phase:"Preliminary Plat",category:"Milestone",min:0,avg:7,max:14,dependencies:["w12"],responsible:"Town Board",notes:"Conditions of approval. 6-month validity for final plat.",confidence:"High",risk:false,risk_desc:""},
+{id:"w13",name:"NYSDEC Jurisdictional Determination",phase:"Infrastructure Permitting",category:"State Agency",min:30,avg:90,max:180,dependencies:["w12b"],responsible:"NYSDEC Region 9",notes:"2025 expanded jurisdiction. Wheatfield has significant conservation areas per §200-46.",confidence:"Medium",risk:true,risk_desc:"Adds 90-180 days. Conservation area setbacks per §200-46."},
+{id:"w13b",name:"NYSDEC Wetlands Permit (Article 24)",phase:"Infrastructure Permitting",category:"State Agency",min:90,avg:180,max:365,dependencies:["w13"],responsible:"NYSDEC Region 9",notes:"Article 24 ECL. Wheatfield conservation areas include watercourses and wetlands per §200-46B.",confidence:"Medium",risk:true,risk_desc:"Individual permit 90-365 days."},
+{id:"w13c",name:"Niagara County Health Dept Approval",phase:"Infrastructure Permitting",category:"County",min:30,avg:60,max:120,dependencies:["w12b"],responsible:"Niagara County Health",notes:"Required for water/sewer. NOTE: Niagara County jurisdiction.",confidence:"High",risk:false,risk_desc:""},
+{id:"w14",name:"Final Plat Preparation",phase:"Final Plat",category:"Applicant",min:21,avg:45,max:90,dependencies:["w12b"],responsible:"Applicant / PE",notes:"Conservation easements per §200-47.4. HOA documents for open space maintenance. Development envelopes per §200-47.2E(1).",confidence:"High",risk:false,risk_desc:""},
+{id:"w14b",name:"Conservation Easement & HOA Documentation",phase:"Final Plat",category:"Applicant",min:14,avg:30,max:60,dependencies:["w14"],responsible:"Applicant / Attorney",notes:"Per §200-47.4. Permanent conservation easement on open space. HOA established for maintenance. No further subdivision permitted per §200-47.5C.",confidence:"High",risk:false,risk_desc:""},
+{id:"w15",name:"Final Plat TB Approval (62-Day Clock)",phase:"Final Plat",category:"Town",min:14,avg:30,max:62,dependencies:["w14","w14b"],responsible:"Town Board",notes:"Per §200-47.5B and Ch. 169. 62-day statutory clock. No further subdivision of cluster per §200-47.5C.",confidence:"High",risk:false,risk_desc:""},
+{id:"w15b",name:"Niagara County Clerk Filing",phase:"Final Plat",category:"Milestone",min:3,avg:7,max:14,dependencies:["w15"],responsible:"Applicant",notes:"Recorded with Niagara County Clerk. Within 62 days of signature.",confidence:"High",risk:false,risk_desc:""},
+{id:"w16",name:"Construction Permits & Bond",phase:"Construction Permitting",category:"Town",min:14,avg:21,max:45,dependencies:["w15b"],responsible:"Building Dept / Engineer",notes:"Per §200-47.4B(2-3). Open space improvements must be completed or bonded BEFORE building permits issued.",confidence:"High",risk:false,risk_desc:""},
+{id:"w16b",name:"Building Permits",phase:"Construction Permitting",category:"Town",min:7,avg:14,max:30,dependencies:["w16"],responsible:"Building Dept",notes:"Per Ch. 69. Individual lot permits within development envelopes only. Min 20ft between structures per §200-47.2E.",confidence:"High",risk:false,risk_desc:""},
+{id:"w17",name:"Open Space & Trail Improvements",phase:"Construction",category:"Applicant",min:21,avg:45,max:90,dependencies:["w16"],responsible:"Landscape Contractor",notes:"Per §200-47.4B(2). Trails, landscaping, passive/active recreation per approved plan. Must be completed before or concurrent with infrastructure.",confidence:"High",risk:false,risk_desc:""},
+{id:"w17b",name:"Underground Utilities (Water & Sewer)",phase:"Construction",category:"Applicant",min:30,avg:60,max:120,dependencies:["w17"],responsible:"Utility Contractors",notes:"Per Niagara County Health specs. Sewer before road base.",confidence:"High",risk:false,risk_desc:""},
+{id:"w17c",name:"Drainage & Stormwater Construction",phase:"Construction",category:"Applicant",min:21,avg:45,max:90,dependencies:["w17"],responsible:"Utility Contractors",notes:"Per Ch. 164 Stormwater Management. Storm sewer, detention/retention per approved SWPPP.",confidence:"High",risk:false,risk_desc:""},
+{id:"w17d",name:"Road Construction (Base & Paving)",phase:"Construction",category:"Applicant",min:30,avg:60,max:120,dependencies:["w17b","w17c"],responsible:"Paving Contractor",notes:"Per Ch. 169 and Ch. 138 Public Improvements. Min pavement width per Town standards.",confidence:"High",risk:false,risk_desc:""},
+{id:"w17e",name:"Sidewalks, Curbs & Monuments",phase:"Construction",category:"Applicant",min:14,avg:30,max:60,dependencies:["w17d"],responsible:"Contractor / Surveyor",notes:"ADA curb ramps. Monuments per survey. Street name signs.",confidence:"High",risk:false,risk_desc:""},
+{id:"w18",name:"Vertical Construction (Homes)",phase:"Construction",category:"Applicant",min:120,avg:180,max:365,dependencies:["w17d","w16b"],responsible:"Builder",notes:"Within development envelopes only. Min 20ft between structures. 25ft front setback per §200-47.2E.",confidence:"Medium",risk:true,risk_desc:"WNY winters. Development envelope constraints limit footprint flexibility."},
+{id:"w19",name:"Town Engineer Inspections (Ongoing)",phase:"Inspections & Acceptance",category:"Town",min:0,avg:0,max:0,dependencies:["w17"],responsible:"Town Engineer",notes:"Ongoing during all construction phases. Infrastructure and open space inspection.",confidence:"High",risk:false,risk_desc:""},
+{id:"w19b",name:"PE As-Built Certification",phase:"Inspections & Acceptance",category:"Applicant",min:14,avg:30,max:60,dependencies:["w17e","w17b"],responsible:"Registered PE",notes:"Certified as-built plans for all infrastructure and open space improvements.",confidence:"High",risk:false,risk_desc:""},
+{id:"w20",name:"Maintenance Bond & Town Board Acceptance",phase:"Inspections & Acceptance",category:"Town",min:10,avg:21,max:45,dependencies:["w19b"],responsible:"Town Board",notes:"Maintenance bond. TB resolution to accept roads/infrastructure. 2-year maintenance period.",confidence:"High",risk:true,risk_desc:"Roads private until TB acceptance."},
+{id:"w21",name:"Certificate of Occupancy",phase:"Inspections & Acceptance",category:"Town",min:7,avg:14,max:30,dependencies:["w18","w19b"],responsible:"Building Dept",notes:"Per dwelling. Open space improvements must be complete. Per Ch. 200 §200-91.",confidence:"High",risk:false,risk_desc:""}
+];
+// Towns configuration
+const TOWNS={
+amherst:{id:"amherst",label:"Amherst",fullName:"Town of Amherst, NY",county:"Erie County",state:"New York",authority:"NYS Town Law §276 & §278",chapterRef:"Chapter 204 Subdivision Regulations",effectiveDate:"April 3, 2009",status:"Adopted",planningBoard:"1st & 3rd Thursdays at 6:30 PM",townBoard:"1st Monday (work) & 3rd Monday (regular)",contact:{address:"5583 Main St, Williamsville, NY 14221",phone:"(716) 631-7051",hours:"8:00 AM – 4:00 PM, Mon–Fri"},notes:"Jurisdiction excludes Village of Williamsville. Planning Director classifies Major (10+) or Minor (5–9 lots). SEQR review required.",tasks:AT,phaseOrder:["Pre-Application","Sketch Plan","Preliminary Plat","Infrastructure Permitting","Final Plat","Construction Permitting","Construction","Inspections & Acceptance"]},
+clarence:{id:"clarence",label:"Clarence",fullName:"Town of Clarence, NY",county:"Erie County",state:"New York",authority:"NYS Town Law Article 16 & Municipal Home Rule Law §10",chapterRef:"Chapter 193 — Subdivision of Land",effectiveDate:"Oct 12, 2005 (L.L. No. 5-2005, amended 12-1-2010)",status:"Adopted",planningBoard:"2nd & 4th Wednesdays (typical)",townBoard:"1st & 3rd Wednesdays",contact:{address:"1 Town Place, Clarence, NY 14031",phone:"(716) 741-8930",hours:"8:30 AM – 4:30 PM"},notes:"DUAL-BOARD: Town Board first, then Planning Board. Town Board has sole road dedication authority. §193-17 Adequate Public Facilities. Open Development Areas (Article V).",tasks:CT,phaseOrder:["Pre-Application","Concept Plan","Preliminary Plat","Agency Referrals","Infrastructure Permitting","Final Plat","County Clerk Filing","Construction","Inspections & Acceptance"]},
+hamburg:{id:"hamburg",label:"Hamburg",fullName:"Town of Hamburg, NY",county:"Erie County",state:"New York",authority:"NYS Town Law §276 & §278",chapterRef:"Planning Dept Major Subdivision Review",effectiveDate:"Fee schedule rev. 3/25/24",status:"Adopted",planningBoard:"Monthly (check schedule)",townBoard:"1st & 3rd Mondays",contact:{address:"6100 S. Park Ave, Hamburg, NY 14075",phone:"(716) 649-2023",hours:"Planning Dept — call"},notes:"Contact: Joshua Rogers. 2-week submittal deadline. Condos only R-3. Full EAF Part 1 required via DEC EAF Mapper. SWPPP fee varies by acreage.",tasks:HT,phaseOrder:["Pre-Application","Sketch Plan","Preliminary Plat","SEQR Review","Agency Referrals","Public Hearing","Infrastructure Permitting","Final Plat","Construction Permitting","Construction","Inspections & Acceptance"]},
+lancaster:{id:"lancaster",label:"Lancaster",fullName:"Town of Lancaster, NY",county:"Erie County",state:"New York",authority:"NYS Town Law §276 & Municipal Home Rule Law §10",chapterRef:"§400-38 Subdivisions",effectiveDate:"Amended 12-19-2022 (L.L. No. 10-2022)",status:"Adopted",planningBoard:"Monthly",townBoard:"Regular meetings",contact:{address:"21 Central Ave, Lancaster, NY 14086",phone:"(716) 683-1610",hours:"Mon–Fri business hours"},notes:"DUAL-BOARD: PB recommends → TB has SOLE FINAL AUTHORITY. 45-day PB clock + 45-day TB clock. Resubmission = full restart. 40% maintenance bond per Ch. 206. No flag lots per §400-38D(3). Separate NYSDOT/County highway access permit.",tasks:LT,phaseOrder:["Pre-Application","Sketch Plan","Preliminary Plat","Planning Board Review","Town Board Review","Infrastructure Permitting","Final Plat","Construction Permitting","Construction","Inspections & Acceptance"]},
+orchardPark:{id:"orchardPark",label:"Orchard Park",fullName:"Town of Orchard Park, NY",county:"Erie County",state:"New York",authority:"NYS Town Law §276 & §278",chapterRef:"Chapter 121 — Subdivision of Land",effectiveDate:"Amended 4-27-2011 (L.L. No. 1-2011)",status:"Adopted",planningBoard:"Monthly",townBoard:"Regular meetings",contact:{address:"4295 S. Buffalo St, Orchard Park, NY 14127",phone:"(716) 662-6400",hours:"Mon–Fri business hours"},notes:"THREE 62-DAY CLOCKS: (1) Hearing within 62d of receipt, (2) Action within 62d of hearing close, (3) Final plat within 62d of final hearing. PB has final authority. Conservation Board reviews. Dev Form 3 = multi-agency sign-off. Ch. 144 Stormwater.",tasks:OT,phaseOrder:["Pre-Application","Sketch Plan","Preliminary Plat","Public Hearing","Town Board Review","Infrastructure Permitting","Final Plat","Construction Permitting","Construction","Inspections & Acceptance"]},
+pendleton:{id:"pendleton",label:"Pendleton",fullName:"Town of Pendleton, NY",county:"Niagara County",state:"New York",authority:"NYS Town Law §276 & §278",chapterRef:"Chapter 220 — Subdivision of Land",effectiveDate:"As codified",status:"Adopted",planningBoard:"Monthly (check schedule)",townBoard:"Regular meetings",contact:{address:"6570 Campbell Blvd, Lockport, NY 14094",phone:"(716) 625-8833",hours:"Mon–Fri business hours"},notes:"Compact code (7 pages). Niagara County. Temp occupancy max 120 days per §220-18E. Highway Supt determines monuments/signs. Ch. 247 Art. XIII Stormwater. No CO until drainage accepted per §220-18D.",tasks:PT,phaseOrder:["Pre-Application","Sketch Plan","Preliminary Plat","Public Hearing","Infrastructure Permitting","Final Plat","Construction Permitting","Construction","Inspections & CO"]},
+wheatfield:{id:"wheatfield",label:"Wheatfield",fullName:"Town of Wheatfield, NY",county:"Niagara County",state:"New York",authority:"NYS Town Law §276, §278",chapterRef:"Ch. 169 Subdivision + Conservation/Cluster (§200-45–47)",effectiveDate:"Adopted (source: ecode360 codification; draft rev. March 2016)",status:"Adopted",planningBoard:"Regular meetings",townBoard:"Regular meetings",contact:{address:"2800 Church Rd, N. Tonawanda, NY 14120",phone:"(716) 694-6635",hours:"Mon–Fri business hours"},notes:"Submittal: Wed noon, 1 week before PB. Conservation/cluster ≥40% open space. Greenspace Focus Group. TB authorizes cluster. No further subdivision per §200-47.5C. Ch. 164 Stormwater (L.L. No. 9-2007). Conservation areas per §200-46.",tasks:WT,phaseOrder:["Pre-Application","Sketch Plan","Preliminary Plat","Public Hearing","Final Plat","Infrastructure Permitting","Construction Permitting","Construction","Inspections & Acceptance"]},
+};
+const TO=["amherst","clarence","hamburg","lancaster","orchardPark","pendleton","wheatfield"];
+const TOWN_IDS=TO;
+// Reference data: costs, document checklist, contacts
+
+
+const COST_ESTIMATES=[
+  {category:"Engineering & Survey",items:[
+    {name:"Boundary/Topo Survey",range:"$8,000 – $25,000"},
+    {name:"Full Engineering (Prelim + Final)",range:"$40,000 – $120,000"},
+    {name:"SWPPP Design",range:"$5,000 – $15,000"},
+    {name:"Traffic Impact Study",range:"$8,000 – $20,000"},
+    {name:"Wetland Delineation",range:"$3,000 – $12,000"},
+  ]},
+  {category:"Environmental",items:[
+    {name:"Phase I ESA",range:"$2,500 – $5,000"},
+    {name:"Phase II ESA (if triggered)",range:"$10,000 – $40,000"},
+    {name:"NYSDEC Wetlands Permit (consultant)",range:"$5,000 – $25,000"},
+    {name:"USACE Section 404 (consultant)",range:"$5,000 – $30,000"},
+  ]},
+  {category:"Town Fees",items:[
+    {name:"Application Filing Fee",range:"$500 – $2,500"},
+    {name:"Engineering Review Escrow",range:"$5,000 – $25,000"},
+    {name:"Public Hearing Notice",range:"$300 – $750"},
+    {name:"PIP Permit Fee",range:"$500 – $5,000"},
+    {name:"SWPPP Review Fee",range:"$500 – $3,000"},
+  ]},
+  {category:"Infrastructure (Per Lot)",items:[
+    {name:"Road Construction",range:"$15,000 – $35,000"},
+    {name:"Water Main Extension",range:"$5,000 – $15,000"},
+    {name:"Sanitary Sewer Extension",range:"$8,000 – $20,000"},
+    {name:"Storm Sewer / Detention",range:"$5,000 – $15,000"},
+    {name:"Sidewalks & Curbs",range:"$3,000 – $8,000"},
+  ]},
+  {category:"Bonding",items:[
+    {name:"Performance Bond (100-125%)",range:"1-3% of bond amount"},
+    {name:"Maintenance Bond (25-40%)",range:"1-2% of bond amount"},
+    {name:"Letter of Credit (alternative)",range:"Varies by institution"},
+  ]},
+];
+
+const DOC_CHECKLIST=[
+  {phase:"Pre-Application",items:["Title search / deed","Boundary survey","Topographic survey","Wetland delineation report","Flood zone determination (FEMA)","Zoning verification letter","Utility availability letters (water, sewer, electric, gas)","SEQR EAF Part 1","Pre-application conference request"]},
+  {phase:"Sketch / Preliminary",items:["Sketch plan drawings","Preliminary plat (sealed by PE/LS)","Stormwater Management Plan / SWPPP","Drainage report & calculations","Traffic impact study (if required)","GML §239 referral package","Environmental assessment / EAF Parts 2-3","Application fee payment","Escrow deposit"]},
+  {phase:"Final / Filing",items:["Final plat (ink on Mylar/linen)","As-built survey","Conservation easement (if applicable)","HOA documents (if applicable)","Performance bond / LOC","County Clerk filing fee","Covenants & restrictions","Deed dedication documents"]},
+  {phase:"Construction / Close",items:["PIP permit application","Construction drawings (approved)","SPDES GP NOI filing","Building permit applications","PE as-built certification","Maintenance bond","Town Board acceptance resolution","Certificate(s) of Occupancy"]},
+];
+
+function getContacts(town){
+  const isN=town.county==="Niagara County";
+  return[
+    {group:"Town Office",items:[{label:"Address",value:town.contact?.address||town.address||""},{label:"Phone",value:town.contact?.phone||town.phone||""},{label:"Hours",value:town.contact?.hours||town.hours||""},{label:"PB Schedule",value:town.planningBoard},{label:"TB Schedule",value:town.townBoard}]},
+    {group:"NYSDEC Region 9",items:[{label:"Office",value:"270 Michigan Ave, Buffalo, NY 14203"},{label:"Phone",value:"(716) 851-7220"},{label:"Email",value:"dep.r9@dec.ny.gov"}]},
+    {group:isN?"Niagara County Health":"Erie County Health",items:isN
+      ?[{label:"Address",value:"5467 Upper Mountain Rd, Lockport, NY 14094"},{label:"Phone",value:"(716) 439-7444"}]
+      :[{label:"Address",value:"503 Kensington Ave, Buffalo, NY 14214"},{label:"Phone",value:"(716) 961-6800"}]},
+    {group:"USACE Buffalo District",items:[{label:"Address",value:"1776 Niagara St, Buffalo, NY 14207"},{label:"Phone",value:"(716) 879-4200"},{label:"Branch",value:"Regulatory Branch"}]},
+    {group:isN?"Niagara County Planning":"Erie County DEDP",items:isN
+      ?[{label:"Address",value:"Vail Mansion, 6311 Inducon Corp Dr, Sanborn, NY 14132"},{label:"Phone",value:"(716) 439-7388"}]
+      :[{label:"Address",value:"95 Franklin St, Buffalo, NY 14202"},{label:"Phone",value:"(716) 858-8390"}]},
+    {group:"NYSDOT Region 5",items:[{label:"Office",value:"100 Seneca St, Buffalo, NY 14203"},{label:"Phone",value:"(716) 847-3238"}]},
+  ];
+}
+
+
+// === UTILITIES ===
+// === UTILITIES ===
+// Utilities
+
+function computeSchedule(tasks){
+  const map={};
+  tasks.forEach(t=>{map[t.id]={...t,startDay:0,endDay:0}});
+  function resolve(id){
+    const t=map[id];if(!t)return 0;if(t._resolved)return t.startDay;t._resolved=true;
+    const deps=t.dependencies||t.deps||[];
+    if(!deps.length){t.startDay=0}
+    else{t.startDay=Math.max(...deps.map(dep=>{if(!map[dep])return 0;resolve(dep);return map[dep].endDay}))}
+    t.endDay=t.startDay+(t.avg||1);return t.startDay;
+  }
+  tasks.forEach(t=>resolve(t.id));return map;
+}
+
+// Dev manager storage (separate from tracker)
+const DEV_PREFIX="wny-v8-dev-";
+function loadDevList(){try{return JSON.parse(localStorage.getItem(DEV_PREFIX+"list"))||[]}catch{return[]}}
+function saveDevList(l){localStorage.setItem(DEV_PREFIX+"list",JSON.stringify(l))}
+function loadDevData(id){try{return JSON.parse(localStorage.getItem(DEV_PREFIX+id))}catch{return null}}
+function saveDevData(id,d){localStorage.setItem(DEV_PREFIX+id,JSON.stringify(d))}
+function deleteDevStorage(id){localStorage.removeItem(DEV_PREFIX+id)}
+
+function addDays(date,d){const r=new Date(date);r.setDate(r.getDate()+d);return r}
+function fmtDate(d){if(!d)return"—";const dt=new Date(d);return dt.toLocaleDateString("en-US",{month:"short",day:"numeric",year:"numeric"})}
+function genId(){return Date.now().toString(36)+Math.random().toString(36).slice(2,6)}
+
+
+// === SHARED COMPONENTS ===
+// === SHARED COMPONENTS ===
+// Shared components
+
+function InlineEdit({value,onChange,type="text",mono,style:xs,placeholder}){
+  const[editing,setEditing]=useState(false);const[draft,setDraft]=useState(value);const inputRef=useRef(null);
+  useEffect(()=>{setDraft(value)},[value]);useEffect(()=>{if(editing&&inputRef.current)inputRef.current.focus()},[editing]);
+  if(!editing)return(<span onClick={e=>{e.stopPropagation();setEditing(true)}} title="Click to edit" style={{cursor:"pointer",borderBottom:"1px dashed rgba(255,255,255,0.15)",paddingBottom:1,fontFamily:mono?S.monoFont:"inherit",...xs}} onMouseEnter={e=>e.currentTarget.style.borderBottomColor="rgba(99,102,241,0.5)"} onMouseLeave={e=>e.currentTarget.style.borderBottomColor="rgba(255,255,255,0.15)"}>{value===""||value===undefined?(placeholder||"—"):String(value)}</span>);
+  const commit=()=>{setEditing(false);if(type==="number"){const n=parseFloat(draft);onChange(isNaN(n)?0:n)}else onChange(draft)};
+  return(<input ref={inputRef} type={type} value={draft} onChange={e=>setDraft(e.target.value)} onBlur={commit} onKeyDown={e=>{if(e.key==="Enter")commit();if(e.key==="Escape"){setDraft(value);setEditing(false)}}} onClick={e=>e.stopPropagation()} style={{background:"rgba(99,102,241,0.1)",border:"1px solid rgba(99,102,241,0.4)",borderRadius:6,padding:"2px 6px",color:"#e2e8f0",fontSize:"inherit",fontFamily:mono?S.monoFont:S.fontFamily,outline:"none",width:type==="number"?52:"100%",...xs}}/>)
+}
+
+function InlineTextarea({value,onChange,style:xs,placeholder}){
+  const[editing,setEditing]=useState(false);const[draft,setDraft]=useState(value);const ref=useRef(null);
+  useEffect(()=>{setDraft(value)},[value]);useEffect(()=>{if(editing&&ref.current){ref.current.focus();ref.current.style.height="auto";ref.current.style.height=ref.current.scrollHeight+"px"}},[editing]);
+  if(!editing)return(<span onClick={e=>{e.stopPropagation();setEditing(true)}} title="Click to edit" style={{cursor:"pointer",borderBottom:"1px dashed rgba(255,255,255,0.1)",display:"inline",...xs}} onMouseEnter={e=>e.currentTarget.style.borderBottomColor="rgba(99,102,241,0.4)"} onMouseLeave={e=>e.currentTarget.style.borderBottomColor="rgba(255,255,255,0.1)"}>{value||(placeholder||"—")}</span>);
+  const commit=()=>{setEditing(false);onChange(draft)};
+  return(<textarea ref={ref} value={draft} onChange={e=>{setDraft(e.target.value);e.target.style.height="auto";e.target.style.height=e.target.scrollHeight+"px"}} onBlur={commit} onKeyDown={e=>{if(e.key==="Escape"){setDraft(value);setEditing(false)}}} onClick={e=>e.stopPropagation()} style={{background:"rgba(99,102,241,0.08)",border:"1px solid rgba(99,102,241,0.3)",borderRadius:8,padding:"6px 10px",color:"#e2e8f0",fontSize:"inherit",fontFamily:S.fontFamily,outline:"none",width:"100%",resize:"vertical",minHeight:48,lineHeight:1.6,...xs}}/>)
+}
+
+function PhaseSelect({value,onChange,phaseOrder}){
+  const[open,setOpen]=useState(false);
+  return(<div style={{position:"relative",display:"inline-block"}}><span onClick={e=>{e.stopPropagation();setOpen(!open)}} style={{cursor:"pointer",fontSize:11,padding:"3px 10px",borderRadius:6,background:(PC[value]?.bg||"rgba(255,255,255,0.04)"),color:PC[value]?.bar||"#94a3b8",border:"1px solid "+(PC[value]?.border||"rgba(255,255,255,0.08)")+"33",fontWeight:500,userSelect:"none"}}>{value} ▾</span>
+  {open&&(<div style={{position:"absolute",top:"100%",left:0,marginTop:4,zIndex:100,background:"#1e293b",border:"1px solid rgba(255,255,255,0.12)",borderRadius:10,overflow:"hidden",boxShadow:"0 8px 32px rgba(0,0,0,0.4)",minWidth:200}}>
+    {(phaseOrder||[]).map(p=>(<div key={p} onClick={e=>{e.stopPropagation();onChange(p);setOpen(false)}} style={{padding:"8px 14px",cursor:"pointer",background:p===value?"rgba(99,102,241,0.12)":"transparent",color:PC[p]?.bar||"#e2e8f0",fontSize:12,fontWeight:500,display:"flex",alignItems:"center",gap:8}} onMouseEnter={e=>e.currentTarget.style.background="rgba(255,255,255,0.06)"} onMouseLeave={e=>e.currentTarget.style.background=p===value?"rgba(99,102,241,0.12)":"transparent"}><div style={{width:8,height:8,borderRadius:3,background:PC[p]?.bar}}/>{p}</div>))}
+  </div>)}</div>)
+}
+
+// Dev manager components
+function StatusButton({status,onClick,size=28}){
+  const s=getStatus(status);
+  const isGlow=status==="in_progress"||status==="blocked";
+  return(
+    <button onClick={e=>{e.stopPropagation();onClick&&onClick()}} style={{
+      width:size,height:size,minWidth:size,borderRadius:"50%",border:`2px solid ${s.color}`,
+      background:isGlow?`${s.color}22`:"transparent",cursor:"pointer",display:"flex",alignItems:"center",
+      justifyContent:"center",fontSize:size*0.5,color:s.color,padding:0,fontFamily:S.fontFamily,
+      boxShadow:isGlow?`0 0 8px ${s.color}44`:"none",transition:"all 0.2s"
+    }} title={s.label}>{s.icon}</button>
+  );
+}
+
+function PhaseBadge({phase}){
+  const c=gpc(phase);
+  return(<span style={{display:"inline-block",padding:"2px 10px",borderRadius:12,fontSize:11,fontWeight:500,background:c.bg,color:c.bar,border:`1px solid ${c.bar}33`,whiteSpace:"nowrap"}}>{phase}</span>);
+}
+
+function StatCard({label,value,sub,icon,color="#6366f1"}){
+  return(
+    <div style={{background:"rgba(255,255,255,0.02)",border:"1px solid rgba(255,255,255,0.06)",borderRadius:12,padding:"16px 20px",display:"flex",flexDirection:"column",gap:4,minWidth:140}}>
+      <div style={{display:"flex",justifyContent:"space-between",alignItems:"center"}}>
+        <span style={{fontSize:12,color:"#64748b",textTransform:"uppercase",letterSpacing:"0.5px"}}>{label}</span>
+        {icon&&<span style={{fontSize:18,opacity:0.5}}>{icon}</span>}
+      </div>
+      <div style={{fontSize:28,fontWeight:700,fontFamily:S.monoFont,color}}>{value}</div>
+      {sub&&<div style={{fontSize:11,color:"#475569"}}>{sub}</div>}
+    </div>
+  );
+}
+
+
+// === VIEWS ===
+// === VIEWS ===
+// Township Tracker — V6 Core (base page)
+
+function TrackerView({onNewDev}){
+  const[activeTown,setActiveTown]=useState("amherst");
+  const[townTasks,setTownTasks]=useState(()=>{const init={};TO.forEach(k=>{init[k]=[...TOWNS[k].tasks]});return init});
+  const[completed,setCompleted]=useState(()=>{const init={};TO.forEach(k=>{init[k]={}});return init});
+  const[activeTab,setActiveTab]=useState("gantt");
+  const[startDates,setStartDates]=useState(()=>{const init={};const today=new Date().toISOString().split("T")[0];TO.forEach(k=>{init[k]=today});return init});
+  const[viewMode,setViewMode]=useState("month");
+  const[selectedTask,setSelectedTask]=useState(null);
+  const[filterPhase,setFilterPhase]=useState("All");
+  const[hoveredTask,setHoveredTask]=useState(null);
+  const[showInfo,setShowInfo]=useState(false);
+  const[dragTaskId,setDragTaskId]=useState(null);
+  const[dragOverId,setDragOverId]=useState(null);
+  const[mounted,setMounted]=useState(false);
+  const[saving,setSaving]=useState(false);
+  const[lastSaved,setLastSaved]=useState(null);
+  const[loadingStorage,setLoadingStorage]=useState(true);
+  const ganttRef=useRef(null);
+  useEffect(()=>{setMounted(true)},[]);
+
+  useEffect(()=>{try{const r=localStorage.getItem("wny-tracker-v6");if(r){const d=JSON.parse(r);if(d.townTasks)setTownTasks(d.townTasks);if(d.completed)setCompleted(d.completed);if(d.startDates)setStartDates(d.startDates);if(d.activeTown)setActiveTown(d.activeTown);if(d.savedAt)setLastSaved(new Date(d.savedAt))}}catch(e){}setLoadingStorage(false)},[]);
+
+  const saveProgress=useCallback(()=>{setSaving(true);try{localStorage.setItem("wny-tracker-v6",JSON.stringify({townTasks,completed,startDates,activeTown,savedAt:new Date().toISOString()}));setLastSaved(new Date())}catch(e){}setSaving(false)},[townTasks,completed,startDates,activeTown]);
+
+  const saveRef=useRef(null);
+  useEffect(()=>{if(loadingStorage)return;if(saveRef.current)clearTimeout(saveRef.current);saveRef.current=setTimeout(()=>{saveProgress()},30000);return()=>{if(saveRef.current)clearTimeout(saveRef.current)}},[townTasks,completed,startDates,saveProgress,loadingStorage]);
+
+  const town=TOWNS[activeTown];const tasks=townTasks[activeTown]||[];const comp=completed[activeTown]||{};
+  const startDate=startDates[activeTown]||new Date().toISOString().split("T")[0];const PO=town.phaseOrder;
+
+  const setTasks=useCallback(u=>{setTownTasks(p=>({...p,[activeTown]:typeof u==="function"?u(p[activeTown]||[]):u}))},[activeTown]);
+  const toggleComplete=useCallback(tid=>{setCompleted(p=>({...p,[activeTown]:{...p[activeTown],[tid]:!p[activeTown]?.[tid]}}))},[activeTown]);
+  const updateTask=useCallback((tid,f,v)=>{setTasks(p=>p.map(t=>t.id===tid?{...t,[f]:v}:t));if(selectedTask?.id===tid)setSelectedTask(p=>p?{...p,[f]:v}:null)},[selectedTask,setTasks]);
+  const addTask=useCallback(aid=>{const idx=tasks.findIndex(t=>t.id===aid);const ref=tasks[idx];const nid="c_"+Date.now();const nt={id:nid,name:"New Task",phase:ref?.phase||"Pre-Application",category:"Applicant",min:7,avg:14,max:30,dependencies:aid?[aid]:[],responsible:"TBD",notes:"",confidence:"Medium",risk:false,risk_desc:""};setTasks(p=>{const c=[...p];c.splice(idx+1,0,nt);return c})},[tasks,setTasks]);
+  const deleteTask=useCallback(tid=>{setTasks(p=>p.filter(t=>t.id!==tid).map(t=>({...t,dependencies:t.dependencies.filter(d=>d!==tid)})));if(selectedTask?.id===tid)setSelectedTask(null)},[selectedTask,setTasks]);
+  const duplicateTask=useCallback(tid=>{const idx=tasks.findIndex(t=>t.id===tid);const src=tasks[idx];setTasks(p=>{const c=[...p];c.splice(idx+1,0,{...src,id:"dup_"+Date.now(),name:src.name+" (copy)"});return c})},[tasks,setTasks]);
+  const handleDragStart=useCallback(tid=>{setDragTaskId(tid)},[]);
+  const handleDragOver=useCallback(tid=>{if(tid!==dragTaskId)setDragOverId(tid)},[dragTaskId]);
+  const handleDrop=useCallback(tid=>{if(!dragTaskId||dragTaskId===tid){setDragTaskId(null);setDragOverId(null);return}setTasks(p=>{const c=[...p];const fi=c.findIndex(t=>t.id===dragTaskId);const ti=c.findIndex(t=>t.id===tid);if(fi===-1||ti===-1)return p;const[m]=c.splice(fi,1);c.splice(ti,0,m);return c});setDragTaskId(null);setDragOverId(null)},[dragTaskId,setTasks]);
+  const handleDragEnd=useCallback(()=>{setDragTaskId(null);setDragOverId(null)},[]);
+
+  const schedule=computeSchedule(tasks);
+  const totalDays=Math.max(...tasks.map(t=>schedule[t.id]?.endDay||0),1);
+  const start=new Date(startDate);const projEnd=new Date(start);projEnd.setDate(projEnd.getDate()+totalDays);
+  const dayWidth=viewMode==="week"?14:viewMode==="month"?4:1.5;
+  const phaseGroups={};PO.forEach(p=>{phaseGroups[p]=[]});tasks.forEach(t=>{if(phaseGroups[t.phase])phaseGroups[t.phase].push(t)});
+  const visiblePhases=filterPhase==="All"?PO:[filterPhase];
+  const riskTasks=tasks.filter(t=>t.risk);const totalMonths=Math.round(totalDays/30.44);
+  const completedCount=Object.values(comp).filter(Boolean).length;
+  const progressPct=tasks.length?Math.round(completedCount/tasks.length*100):0;
+
+  const monthHeaders=[];let md=new Date(start);let dc=0;
+  while(dc<totalDays+30){const label=md.toLocaleString("default",{month:"short",year:"2-digit"});const dim=new Date(md.getFullYear(),md.getMonth()+1,0).getDate();monthHeaders.push({label,days:dim,startDay:dc});dc+=dim;md.setMonth(md.getMonth()+1)}
+
+  const formatDate=d=>d.toLocaleDateString("en-US",{month:"short",day:"numeric",year:"numeric"});
+  const iconBtn=(accent="#64748b",small)=>({background:"rgba(255,255,255,0.04)",border:"1px solid rgba(255,255,255,0.08)",borderRadius:small?6:8,width:small?24:30,height:small?24:30,color:accent,cursor:"pointer",display:"flex",alignItems:"center",justifyContent:"center",fontSize:small?12:14,transition:"all 0.2s",flexShrink:0,padding:0});
+  const handleTownSwitch=tid=>{setActiveTown(tid);setSelectedTask(null);setFilterPhase("All");setShowInfo(false)};
+
+  if(loadingStorage)return(<div style={{fontFamily:S.fontFamily,background:"#0c0f1a",minHeight:"100vh",display:"flex",alignItems:"center",justifyContent:"center",color:"#64748b"}}><div style={{textAlign:"center"}}><div style={{fontSize:32,marginBottom:16}}>⬡</div>Loading saved progress...</div></div>);
+
+  return(
+    <div style={{fontFamily:S.fontFamily,background:"linear-gradient(145deg,#0c0f1a 0%,#111827 50%,#0c1220 100%)",minHeight:"100vh",color:"#e2e8f0"}}>
+      <div style={{position:"fixed",top:0,left:0,right:0,bottom:0,backgroundImage:`url("data:image/svg+xml,%3Csvg viewBox='0 0 256 256' xmlns='http://www.w3.org/2000/svg'%3E%3Cfilter id='noise'%3E%3CfeTurbulence type='fractalNoise' baseFrequency='0.9' numOctaves='4' stitchTiles='stitch'/%3E%3C/filter%3E%3Crect width='100%25' height='100%25' filter='url(%23noise)' opacity='0.03'/%3E%3C/svg%3E")`,pointerEvents:"none",zIndex:0}}/>
+      <div style={{position:"relative",zIndex:1,maxWidth:1400,margin:"0 auto",padding:"16px 20px 24px"}}>
+
+        {/* TOWN TABS */}
+        <div style={{display:"flex",gap:2,marginBottom:16,background:"rgba(255,255,255,0.02)",border:"1px solid rgba(255,255,255,0.06)",borderRadius:16,padding:4,overflowX:"auto"}}>
+          {TO.map(tid=>{const t=TOWNS[tid];const isA=activeTown===tid;const tc=Object.values(completed[tid]||{}).filter(Boolean).length;const tt=t.tasks.length;const pct=tt?Math.round(tc/tt*100):0;
+            return(<button key={tid} onClick={()=>handleTownSwitch(tid)} style={{flex:1,minWidth:90,padding:"10px 6px 8px",position:"relative",background:isA?"rgba(99,102,241,0.12)":"transparent",border:isA?"1px solid rgba(99,102,241,0.3)":"1px solid transparent",borderRadius:12,color:isA?"#e2e8f0":"#64748b",fontSize:12,fontWeight:isA?700:500,cursor:"pointer",fontFamily:S.fontFamily,transition:"all 0.25s",display:"flex",flexDirection:"column",alignItems:"center",gap:3}}>
+              <span>{t.label}</span>
+              <div style={{width:"80%",height:3,borderRadius:2,background:"rgba(255,255,255,0.06)",overflow:"hidden"}}><div style={{width:pct+"%",height:"100%",borderRadius:2,background:pct===100?"#22c55e":"#6366f1",transition:"width 0.5s"}}/></div>
+              {t.status==="⚠️ DRAFT"&&<span style={{fontSize:8,color:"#f59e0b",fontWeight:700}}>DRAFT</span>}
+              {isA&&<div style={{position:"absolute",bottom:0,left:"20%",right:"20%",height:2,borderRadius:1,background:"#6366f1"}}/>}
+            </button>)})}
+        </div>
+
+        {/* HEADER */}
+        <div style={{marginBottom:20,opacity:mounted?1:0,transform:mounted?"translateY(0)":"translateY(-20px)",transition:"all 0.6s cubic-bezier(0.16,1,0.3,1)"}}>
+          <div style={{display:"flex",alignItems:"flex-start",justifyContent:"space-between",flexWrap:"wrap",gap:12}}>
+            <div style={{display:"flex",alignItems:"center",gap:12}}>
+              <div style={{width:40,height:40,borderRadius:12,background:"linear-gradient(135deg,#6366f1,#8b5cf6)",display:"flex",alignItems:"center",justifyContent:"center",fontSize:18,boxShadow:"0 4px 20px rgba(99,102,241,0.3)"}}>⬡</div>
+              <div>
+                <h1 style={{fontSize:22,fontWeight:700,margin:0,letterSpacing:"-0.02em",background:"linear-gradient(135deg,#e2e8f0,#94a3b8)",WebkitBackgroundClip:"text",WebkitTextFillColor:"transparent"}}>{town.label} Development Tracker</h1>
+                <p style={{fontSize:12,color:"#64748b",margin:0}}>{town.chapterRef} · {town.county} · <span style={{color:"#6366f1"}}>V6</span>{town.status==="⚠️ DRAFT"&&<span style={{color:"#f59e0b",fontWeight:700,marginLeft:8}}>⚠️ DRAFT</span>}</p>
+              </div>
+            </div>
+            <div style={{display:"flex",gap:6,alignItems:"center",flexWrap:"wrap"}}>
+              <button onClick={saveProgress} disabled={saving} style={{background:"rgba(34,197,94,0.1)",border:"1px solid rgba(34,197,94,0.25)",borderRadius:10,padding:"7px 12px",color:"#34d399",fontSize:12,cursor:"pointer",fontFamily:S.fontFamily,fontWeight:600,opacity:saving?0.7:1}}>{saving?"Saving...":"💾 Save"}</button>
+              {lastSaved&&<span style={{fontSize:10,color:"#334155"}}>Saved {lastSaved.toLocaleTimeString()}</span>}
+              <button onClick={()=>setShowInfo(!showInfo)} style={{background:showInfo?"rgba(99,102,241,0.15)":"rgba(255,255,255,0.04)",border:"1px solid "+(showInfo?"rgba(99,102,241,0.4)":"rgba(255,255,255,0.08)"),borderRadius:10,padding:"7px 12px",color:showInfo?"#a5b4fc":"#94a3b8",fontSize:12,cursor:"pointer",fontFamily:S.fontFamily,fontWeight:500}}>ℹ Info</button>
+              <button onClick={()=>addTask(tasks[tasks.length-1]?.id)} style={{background:"rgba(16,185,129,0.1)",border:"1px solid rgba(16,185,129,0.25)",borderRadius:10,padding:"7px 12px",color:"#34d399",fontSize:12,cursor:"pointer",fontFamily:S.fontFamily,fontWeight:600}}>+ Task</button>
+              <button onClick={()=>{setTasks([...TOWNS[activeTown].tasks]);setCompleted(p=>({...p,[activeTown]:{}}));setSelectedTask(null)}} style={{background:"rgba(239,68,68,0.08)",border:"1px solid rgba(239,68,68,0.2)",borderRadius:10,padding:"7px 12px",color:"#f87171",fontSize:12,cursor:"pointer",fontFamily:S.fontFamily,fontWeight:500}}>↺ Reset</button>
+              {onNewDev&&<button onClick={onNewDev} style={{background:"linear-gradient(135deg,rgba(99,102,241,0.15),rgba(139,92,246,0.15))",border:"1px solid rgba(99,102,241,0.4)",borderRadius:10,padding:"7px 16px",color:"#a5b4fc",fontSize:12,cursor:"pointer",fontFamily:S.fontFamily,fontWeight:700,boxShadow:"0 2px 12px rgba(99,102,241,0.2)"}}>🏗 New Development</button>}
+              <div style={{background:"rgba(255,255,255,0.04)",border:"1px solid rgba(255,255,255,0.08)",borderRadius:10,padding:"5px 10px",display:"flex",alignItems:"center",gap:6}}>
+                <span style={{fontSize:11,color:"#64748b"}}>Start</span>
+                <input type="date" value={startDate} onChange={e=>setStartDates(p=>({...p,[activeTown]:e.target.value}))} style={{background:"transparent",border:"none",color:"#e2e8f0",fontSize:12,fontFamily:S.monoFont,outline:"none",cursor:"pointer"}}/>
+              </div>
+            </div>
+          </div>
+          {showInfo&&(
+            <div style={{marginTop:14,padding:"18px 22px",borderRadius:16,background:"rgba(99,102,241,0.06)",border:"1px solid rgba(99,102,241,0.15)",animation:"fadeSlideIn 0.3s ease"}}>
+              <div style={{display:"grid",gridTemplateColumns:"repeat(auto-fit,minmax(200px,1fr))",gap:16}}>
+                <div><div style={{fontSize:10,color:"#6366f1",fontWeight:600,textTransform:"uppercase",letterSpacing:"0.08em",marginBottom:4}}>Contact</div><div style={{fontSize:12,color:"#e2e8f0",lineHeight:1.7}}>{town.contact.address}<br/>{town.contact.phone}<br/>{town.contact.hours}</div></div>
+                <div><div style={{fontSize:10,color:"#6366f1",fontWeight:600,textTransform:"uppercase",letterSpacing:"0.08em",marginBottom:4}}>Planning Board</div><div style={{fontSize:12,color:"#e2e8f0",lineHeight:1.7}}>{town.planningBoard}</div></div>
+                <div><div style={{fontSize:10,color:"#6366f1",fontWeight:600,textTransform:"uppercase",letterSpacing:"0.08em",marginBottom:4}}>Town Board</div><div style={{fontSize:12,color:"#e2e8f0",lineHeight:1.7}}>{town.townBoard}</div></div>
+                <div><div style={{fontSize:10,color:"#6366f1",fontWeight:600,textTransform:"uppercase",letterSpacing:"0.08em",marginBottom:4}}>Authority</div><div style={{fontSize:12,color:"#e2e8f0",lineHeight:1.7}}>{town.authority}<br/>{town.effectiveDate}</div></div>
+              </div>
+              {town.notes&&<div style={{marginTop:12,padding:"10px 14px",borderRadius:10,background:"rgba(255,255,255,0.03)",border:"1px solid rgba(255,255,255,0.06)",fontSize:12,color:"#94a3b8",lineHeight:1.7}}>{town.notes}</div>}
+            </div>
+          )}
+        </div>
+
+        {/* STATS */}
+        <div style={{display:"grid",gridTemplateColumns:"repeat(auto-fit,minmax(160px,1fr))",gap:10,marginBottom:16}}>
+          {[{label:"Progress",value:progressPct+"%",sub:completedCount+"/"+tasks.length+" tasks",accent:"#22c55e"},{label:"Duration",value:totalDays+"d",sub:"~"+totalMonths+" months",accent:"#06b6d4"},{label:"Timeline",value:formatDate(start),sub:"→ "+formatDate(projEnd),accent:"#6366f1"},{label:"Risks",value:riskTasks.length+"",sub:Math.round(riskTasks.length/tasks.length*100)+"% of tasks",accent:"#ef4444"}].map((s,i)=>(
+            <div key={i} style={{background:"rgba(255,255,255,0.03)",border:"1px solid rgba(255,255,255,0.06)",borderRadius:14,padding:"14px 16px",position:"relative",overflow:"hidden"}}>
+              <div style={{fontSize:10,color:"#64748b",fontWeight:600,textTransform:"uppercase",letterSpacing:"0.06em",marginBottom:5}}>{s.label}</div>
+              <div style={{fontSize:20,fontWeight:700,color:"#f1f5f9",letterSpacing:"-0.02em"}}>{s.value}</div>
+              <div style={{fontSize:11,color:"#64748b",marginTop:2}}>{s.sub}</div>
+              <div style={{position:"absolute",top:0,right:0,width:50,height:"100%",background:`linear-gradient(to left,${s.accent}08,transparent)`,pointerEvents:"none"}}/>
+            </div>))}
+        </div>
+
+        {/* VIEW TABS */}
+        <div style={{display:"flex",gap:4,marginBottom:14,background:"rgba(255,255,255,0.03)",border:"1px solid rgba(255,255,255,0.06)",borderRadius:14,padding:4}}>
+          {[{key:"gantt",label:"Timeline",icon:"◫"},{key:"risks",label:"Risks",icon:"⚡"},{key:"details",label:"Details",icon:"☰"}].map(tab=>(
+            <button key={tab.key} onClick={()=>setActiveTab(tab.key)} style={{flex:1,padding:"10px 16px",background:activeTab===tab.key?"rgba(99,102,241,0.12)":"transparent",border:activeTab===tab.key?"1px solid rgba(99,102,241,0.25)":"1px solid transparent",borderRadius:10,color:activeTab===tab.key?"#a5b4fc":"#64748b",fontSize:13,fontWeight:activeTab===tab.key?600:500,cursor:"pointer",fontFamily:S.fontFamily,display:"flex",alignItems:"center",justifyContent:"center",gap:6}}>
+              <span style={{fontSize:14}}>{tab.icon}</span>{tab.label}
+            </button>))}
+        </div>
+
+        {/* GANTT */}
+        {activeTab==="gantt"&&(
+          <div style={{background:"rgba(255,255,255,0.02)",border:"1px solid rgba(255,255,255,0.06)",borderRadius:16,overflow:"hidden"}}>
+            <div style={{padding:"10px 20px",borderBottom:"1px solid rgba(255,255,255,0.06)",display:"flex",justifyContent:"space-between",alignItems:"center",flexWrap:"wrap",gap:8}}>
+              <div style={{display:"flex",gap:6}}>
+                {["week","month","quarter"].map(v=>(<button key={v} onClick={()=>setViewMode(v)} style={{padding:"5px 12px",borderRadius:8,background:viewMode===v?"rgba(99,102,241,0.15)":"transparent",border:"1px solid "+(viewMode===v?"rgba(99,102,241,0.3)":"rgba(255,255,255,0.06)"),color:viewMode===v?"#a5b4fc":"#64748b",fontSize:12,cursor:"pointer",fontFamily:S.fontFamily,fontWeight:500}}>{v[0].toUpperCase()+v.slice(1)}</button>))}
+              </div>
+              <select value={filterPhase} onChange={e=>setFilterPhase(e.target.value)} style={{background:"rgba(255,255,255,0.05)",border:"1px solid rgba(255,255,255,0.1)",borderRadius:8,padding:"5px 10px",color:"#e2e8f0",fontSize:12,fontFamily:S.fontFamily,cursor:"pointer",outline:"none"}}>
+                <option value="All">All Phases</option>{PO.map(p=><option key={p} value={p}>{p}</option>)}
+              </select>
+            </div>
+            <div ref={ganttRef} style={{overflowX:"auto",overflowY:"auto",maxHeight:"62vh"}}>
+              <div style={{minWidth:totalDays*dayWidth+380,position:"relative"}}>
+                <div style={{display:"flex",position:"sticky",top:0,zIndex:10,background:"rgba(15,23,42,0.95)",backdropFilter:"blur(12px)",borderBottom:"1px solid rgba(255,255,255,0.06)"}}>
+                  <div style={{width:370,minWidth:370,padding:"10px 16px",fontSize:11,color:"#475569",fontWeight:600,textTransform:"uppercase",letterSpacing:"0.06em",position:"sticky",left:0,zIndex:12,background:"rgba(15,23,42,0.95)",borderRight:"1px solid rgba(255,255,255,0.06)"}}>Task</div>
+                  <div style={{display:"flex",flex:1}}>{monthHeaders.map((mh,i)=>(<div key={i} style={{width:mh.days*dayWidth,minWidth:mh.days*dayWidth,padding:"10px 8px",fontSize:11,color:"#64748b",fontWeight:500,borderLeft:"1px solid rgba(255,255,255,0.04)",fontFamily:S.monoFont}}>{mh.label}</div>))}</div>
+                </div>
+                {visiblePhases.map(phase=>{const pT=phaseGroups[phase]||[];if(!pT.length)return null;const co=PC[phase]||{bar:"#64748b",bg:"rgba(100,116,139,0.08)",border:"#64748b",glow:"rgba(100,116,139,0.2)"};
+                  return(<div key={phase}>
+                    <div style={{display:"flex",position:"sticky",top:37,zIndex:5,background:co.bg,borderBottom:"1px solid "+co.border+"22",backdropFilter:"blur(8px)"}}>
+                      <div style={{width:370,minWidth:370,padding:"7px 16px",fontSize:11,fontWeight:700,color:co.bar,textTransform:"uppercase",letterSpacing:"0.08em",display:"flex",alignItems:"center",gap:8,position:"sticky",left:0,zIndex:6,background:co.bg,borderRight:"1px solid rgba(255,255,255,0.06)"}}>
+                        <div style={{width:8,height:8,borderRadius:3,background:co.bar}}/>{phase}
+                        <button onClick={()=>addTask(pT[pT.length-1]?.id||tasks[tasks.length-1]?.id)} style={{marginLeft:"auto",background:"rgba(255,255,255,0.06)",border:"1px solid rgba(255,255,255,0.1)",borderRadius:5,color:co.bar,fontSize:11,padding:"2px 8px",cursor:"pointer",fontFamily:S.fontFamily,fontWeight:600}}>+</button>
+                      </div>
+                    </div>
+                    {pT.map(task=>{const s=schedule[task.id];if(!s)return null;const isH=hoveredTask===task.id;const isS=selectedTask?.id===task.id;const isDone=comp[task.id];
+                      return(<div key={task.id} onDragOver={e=>{e.preventDefault();handleDragOver(task.id)}} onDrop={e=>{e.preventDefault();handleDrop(task.id)}} style={{display:"flex",cursor:"pointer",background:dragOverId===task.id?"rgba(99,102,241,0.08)":isS?co.bg:isH?"rgba(255,255,255,0.02)":"transparent",borderBottom:"1px solid rgba(255,255,255,0.03)",borderTop:dragOverId===task.id?"2px solid #6366f1":"2px solid transparent",opacity:dragTaskId===task.id?0.4:isDone?0.5:1,transition:"background 0.15s,opacity 0.15s"}} onClick={()=>setSelectedTask(isS?null:task)} onMouseEnter={()=>setHoveredTask(task.id)} onMouseLeave={()=>setHoveredTask(null)}>
+                        <div style={{width:370,minWidth:370,padding:"7px 10px",display:"flex",alignItems:"center",gap:5,position:"sticky",left:0,zIndex:2,background:dragOverId===task.id?"rgba(99,102,241,0.08)":isS?co.bg:isH?"rgba(30,41,59,1)":"rgba(15,23,42,1)",borderRight:"1px solid rgba(255,255,255,0.06)"}}>
+                          <div draggable onDragStart={e=>{e.stopPropagation();handleDragStart(task.id)}} onDragEnd={handleDragEnd} onClick={e=>e.stopPropagation()} style={{cursor:"grab",color:"#334155",fontSize:13,padding:"3px 2px",userSelect:"none",flexShrink:0}}>⬡</div>
+                          <div onClick={e=>{e.stopPropagation();toggleComplete(task.id)}} style={{width:16,height:16,borderRadius:4,border:isDone?"2px solid #22c55e":"2px solid rgba(255,255,255,0.12)",background:isDone?"rgba(34,197,94,0.2)":"transparent",display:"flex",alignItems:"center",justifyContent:"center",cursor:"pointer",flexShrink:0,fontSize:9,color:"#22c55e"}}>{isDone?"✓":""}</div>
+                          <div style={{flex:1,minWidth:0}}>
+                            <div style={{fontSize:12,fontWeight:500,color:isDone?"#475569":"#e2e8f0",whiteSpace:"nowrap",overflow:"hidden",textOverflow:"ellipsis",display:"flex",alignItems:"center",gap:4,textDecoration:isDone?"line-through":"none"}}>
+                              {task.risk&&<span style={{color:"#ef4444",fontSize:10}}>●</span>}{task.category==="Milestone"&&<span style={{color:"#6366f1",fontSize:10}}>◆</span>}{task.name}
+                            </div>
+                            <div style={{fontSize:10,color:"#475569",fontFamily:S.monoFont}}>{task.min}d–{task.avg}d–{task.max}d</div>
+                          </div>
+                          {isH&&(<div style={{display:"flex",gap:3,flexShrink:0}} onClick={e=>e.stopPropagation()}><button onClick={()=>addTask(task.id)} style={iconBtn("#10b981",true)}>+</button><button onClick={()=>duplicateTask(task.id)} style={iconBtn("#6366f1",true)}>⧉</button><button onClick={()=>deleteTask(task.id)} style={iconBtn("#ef4444",true)}>✕</button></div>)}
+                        </div>
+                        <div style={{flex:1,position:"relative",display:"flex",alignItems:"center"}}>
+                          <div style={{position:"absolute",left:s.startDay*dayWidth,width:Math.max((task.max-task.min)*dayWidth,2),marginLeft:task.min*dayWidth,height:5,borderRadius:3,background:co.bar+"15"}}/>
+                          <div style={{position:"absolute",left:s.startDay*dayWidth,width:Math.max(task.avg*dayWidth,task.category==="Milestone"?10:4),height:task.category==="Milestone"?10:16,borderRadius:task.category==="Milestone"?5:5,background:isDone?"#22c55e":task.category==="Milestone"?co.bar:`linear-gradient(90deg,${co.bar},${co.bar}aa)`,boxShadow:isH||isS?`0 0 16px ${co.glow}`:"none",transform:task.category==="Milestone"?"rotate(45deg)":"none",opacity:0.85}}/>
+                        </div>
+                      </div>)})}
+                  </div>)})}
+              </div>
+            </div>
+            {selectedTask&&(
+              <div style={{borderTop:"1px solid rgba(255,255,255,0.06)",padding:20,background:"rgba(255,255,255,0.02)",animation:"fadeSlideIn 0.3s ease"}}>
+                <div style={{display:"flex",justifyContent:"space-between",alignItems:"flex-start",marginBottom:14,flexWrap:"wrap",gap:10}}>
+                  <div style={{flex:1,minWidth:200}}>
+                    <div style={{fontSize:15,fontWeight:600,color:"#f1f5f9",marginBottom:3}}><InlineEdit value={selectedTask.name} onChange={v=>updateTask(selectedTask.id,"name",v)} style={{fontSize:15,fontWeight:600}}/></div>
+                    <div style={{display:"flex",gap:8,flexWrap:"wrap",alignItems:"center"}}>
+                      <PhaseSelect value={selectedTask.phase} onChange={v=>updateTask(selectedTask.id,"phase",v)} phaseOrder={PO}/>
+                      <span style={{fontSize:11,color:"#64748b"}}><InlineEdit value={selectedTask.responsible} onChange={v=>updateTask(selectedTask.id,"responsible",v)} style={{fontSize:11}}/></span>
+                    </div>
+                  </div>
+                  <div style={{display:"flex",gap:6}}>
+                    {[{v:selectedTask.min,c:"#10b981",f:"min",l:"Min"},{v:selectedTask.avg,c:"#6366f1",f:"avg",l:"Avg"},{v:selectedTask.max,c:"#ef4444",f:"max",l:"Max"}].map((x,i)=>(
+                      <div key={i} style={{textAlign:"center"}}><div style={{fontSize:9,color:"#475569",textTransform:"uppercase",marginBottom:2}}>{x.l}</div><div style={{fontSize:12,fontFamily:S.monoFont,color:x.c,padding:"3px 10px",borderRadius:7,background:x.c+"10",border:"1px solid "+x.c+"22"}}><InlineEdit value={x.v} onChange={v=>updateTask(selectedTask.id,x.f,v)} type="number" mono style={{fontSize:12,width:36,color:x.c}}/>d</div></div>))}
+                  </div>
+                </div>
+                <div style={{marginBottom:10}}><div style={{fontSize:10,color:"#475569",fontWeight:600,textTransform:"uppercase",marginBottom:4}}>Notes</div><InlineTextarea value={selectedTask.notes} onChange={v=>updateTask(selectedTask.id,"notes",v)} style={{fontSize:12,color:"#94a3b8",lineHeight:1.7}} placeholder="Click to add notes..."/></div>
+                {selectedTask.risk&&(<div style={{padding:"12px 16px",borderRadius:10,background:"rgba(239,68,68,0.06)",border:"1px solid rgba(239,68,68,0.15)",marginBottom:10}}><div style={{fontSize:10,color:"#ef4444",fontWeight:600,textTransform:"uppercase",marginBottom:4}}>⚡ Risk</div><InlineTextarea value={selectedTask.risk_desc} onChange={v=>updateTask(selectedTask.id,"risk_desc",v)} style={{fontSize:12,color:"#fca5a5"}} placeholder="Describe risk..."/></div>)}
+                <div><div style={{fontSize:10,color:"#475569",fontWeight:600,textTransform:"uppercase",marginBottom:4}}>Dependencies</div>
+                  <div style={{display:"flex",gap:5,flexWrap:"wrap",alignItems:"center"}}>
+                    {(selectedTask.dependencies||[]).map(did=>{const dt=tasks.find(t=>t.id===did);return(<span key={did} style={{fontSize:10,padding:"2px 7px",borderRadius:5,background:"rgba(255,255,255,0.04)",color:"#94a3b8",border:"1px solid rgba(255,255,255,0.08)",display:"flex",alignItems:"center",gap:3}}>{dt?dt.name.substring(0,25):did}<span onClick={e=>{e.stopPropagation();updateTask(selectedTask.id,"dependencies",selectedTask.dependencies.filter(d=>d!==did))}} style={{cursor:"pointer",color:"#ef4444",fontWeight:700}}>×</span></span>)})}
+                    <select value="" onChange={e=>{if(e.target.value&&!selectedTask.dependencies.includes(e.target.value))updateTask(selectedTask.id,"dependencies",[...selectedTask.dependencies,e.target.value])}} onClick={e=>e.stopPropagation()} style={{background:"rgba(255,255,255,0.05)",border:"1px solid rgba(255,255,255,0.1)",borderRadius:6,padding:"2px 7px",color:"#94a3b8",fontSize:10,fontFamily:S.fontFamily,cursor:"pointer",outline:"none"}}><option value="">+ dep</option>{tasks.filter(t=>t.id!==selectedTask.id&&!(selectedTask.dependencies||[]).includes(t.id)).map(t=>(<option key={t.id} value={t.id}>{t.name.substring(0,35)}</option>))}</select>
+                  </div>
+                </div>
+              </div>)}
+          </div>)}
+
+        {/* RISKS */}
+        {activeTab==="risks"&&(<div style={{display:"grid",gap:10}}>
+          <div style={{fontSize:13,color:"#64748b",padding:"0 4px",marginBottom:4}}>{riskTasks.length} risk items across {new Set(riskTasks.map(t=>t.phase)).size} phases</div>
+          {riskTasks.map((task,i)=>{const co=PC[task.phase]||{bar:"#64748b",bg:"rgba(100,116,139,0.08)"};return(
+            <div key={task.id} style={{background:"rgba(255,255,255,0.02)",border:"1px solid rgba(255,255,255,0.06)",borderRadius:14,padding:"16px 20px",animation:`fadeSlideIn 0.4s ease ${i*0.05}s both`}}>
+              <div style={{display:"flex",alignItems:"center",gap:8,marginBottom:8}}><div style={{width:8,height:8,borderRadius:"50%",background:"#ef4444",boxShadow:"0 0 8px rgba(239,68,68,0.4)"}}/><span style={{fontSize:14,color:"#f1f5f9",fontWeight:600}}><InlineEdit value={task.name} onChange={v=>updateTask(task.id,"name",v)} style={{fontSize:14,fontWeight:600}}/></span></div>
+              <div style={{display:"flex",gap:8,marginBottom:10,flexWrap:"wrap"}}>
+                <PhaseSelect value={task.phase} onChange={v=>updateTask(task.id,"phase",v)} phaseOrder={PO}/>
+                <span style={{fontSize:11,padding:"2px 8px",borderRadius:6,background:"rgba(255,255,255,0.04)",color:"#94a3b8"}}>{task.responsible}</span>
+                <span style={{fontSize:11,padding:"2px 8px",borderRadius:6,background:"rgba(255,255,255,0.04)",color:"#94a3b8",fontFamily:S.monoFont}}>{task.min}d–{task.max}d</span>
+              </div>
+              <div style={{fontSize:13,color:"#fca5a5",lineHeight:1.7}}><InlineTextarea value={task.risk_desc} onChange={v=>updateTask(task.id,"risk_desc",v)} style={{fontSize:13,color:"#fca5a5"}} placeholder="Add risk description..."/></div>
+            </div>)})}</div>)}
+
+        {/* DETAILS */}
+        {activeTab==="details"&&(<div>{PO.map(phase=>{const pT=tasks.filter(t=>t.phase===phase);if(!pT.length)return null;const co=PC[phase]||{bar:"#64748b",border:"#64748b"};return(
+          <div key={phase} style={{marginBottom:20}}>
+            <div style={{display:"flex",alignItems:"center",gap:8,marginBottom:10,paddingBottom:8,borderBottom:"1px solid "+co.border+"22"}}>
+              <div style={{width:10,height:10,borderRadius:3,background:co.bar}}/><span style={{fontSize:12,fontWeight:700,color:co.bar,textTransform:"uppercase",letterSpacing:"0.08em"}}>{phase}</span><span style={{fontSize:12,color:"#475569"}}>· {pT.length}</span>
+              <button onClick={()=>addTask(pT[pT.length-1]?.id)} style={{marginLeft:"auto",background:"rgba(255,255,255,0.06)",border:"1px solid rgba(255,255,255,0.1)",borderRadius:7,color:co.bar,fontSize:12,padding:"4px 12px",cursor:"pointer",fontFamily:S.fontFamily,fontWeight:600}}>+ Add</button>
+            </div>
+            <div style={{display:"grid",gap:8}}>{pT.map(task=>{const isDone=comp[task.id];return(
+              <div key={task.id} draggable onDragStart={()=>handleDragStart(task.id)} onDragEnd={handleDragEnd} onDragOver={e=>{e.preventDefault();handleDragOver(task.id)}} onDrop={e=>{e.preventDefault();handleDrop(task.id)}} style={{background:dragOverId===task.id?"rgba(99,102,241,0.08)":"rgba(255,255,255,0.02)",border:dragOverId===task.id?"1px solid rgba(99,102,241,0.4)":"1px solid rgba(255,255,255,0.06)",borderRadius:12,padding:"14px 18px",opacity:dragTaskId===task.id?0.4:isDone?0.5:1,cursor:"grab"}}>
+                <div style={{display:"flex",justifyContent:"space-between",alignItems:"flex-start",marginBottom:6,flexWrap:"wrap",gap:6}}>
+                  <div style={{display:"flex",alignItems:"center",gap:6,flex:1,minWidth:0}}>
+                    <span style={{color:"#334155",fontSize:16,cursor:"grab",userSelect:"none"}}>⬡</span>
+                    <div onClick={()=>toggleComplete(task.id)} style={{width:18,height:18,borderRadius:5,border:isDone?"2px solid #22c55e":"2px solid rgba(255,255,255,0.12)",background:isDone?"rgba(34,197,94,0.2)":"transparent",display:"flex",alignItems:"center",justifyContent:"center",cursor:"pointer",flexShrink:0,fontSize:10,color:"#22c55e"}}>{isDone?"✓":""}</div>
+                    {task.risk&&<span style={{color:"#ef4444",fontSize:10}}>●</span>}
+                    <span style={{fontSize:13,color:isDone?"#475569":"#e2e8f0",fontWeight:500,textDecoration:isDone?"line-through":"none"}}><InlineEdit value={task.name} onChange={v=>updateTask(task.id,"name",v)} style={{fontSize:13,fontWeight:500}}/></span>
+                  </div>
+                  <div style={{display:"flex",gap:5,alignItems:"center"}}>
+                    {[{v:task.min,c:"#10b981",f:"min"},{v:task.avg,c:"#6366f1",f:"avg"},{v:task.max,c:"#ef4444",f:"max"}].map((x,i)=>(<span key={i} style={{fontSize:11,fontFamily:S.monoFont,color:x.c,padding:"1px 5px",borderRadius:5,background:x.c+"10"}}><InlineEdit value={x.v} onChange={v=>updateTask(task.id,x.f,v)} type="number" mono style={{fontSize:11,width:32,color:x.c}}/>d</span>))}
+                    <button onClick={()=>duplicateTask(task.id)} style={iconBtn("#6366f1",true)}>⧉</button>
+                    <button onClick={()=>deleteTask(task.id)} style={iconBtn("#ef4444",true)}>✕</button>
+                  </div>
+                </div>
+                <div style={{fontSize:11,color:"#64748b",marginBottom:4,display:"flex",alignItems:"center",gap:6}}>
+                  <PhaseSelect value={task.phase} onChange={v=>updateTask(task.id,"phase",v)} phaseOrder={PO}/><InlineEdit value={task.responsible} onChange={v=>updateTask(task.id,"responsible",v)} style={{fontSize:11,color:"#64748b"}}/>
+                </div>
+                <div style={{fontSize:12,color:"#94a3b8",lineHeight:1.6}}><InlineTextarea value={task.notes} onChange={v=>updateTask(task.id,"notes",v)} style={{fontSize:12,color:"#94a3b8"}} placeholder="Add notes..."/></div>
+                {task.risk&&task.risk_desc&&(<div style={{marginTop:8,padding:"8px 12px",borderRadius:8,background:"rgba(239,68,68,0.06)",border:"1px solid rgba(239,68,68,0.12)",fontSize:11,lineHeight:1.5}}><span style={{fontWeight:600,color:"#ef4444"}}>Risk: </span><InlineTextarea value={task.risk_desc} onChange={v=>updateTask(task.id,"risk_desc",v)} style={{fontSize:11,color:"#fca5a5"}}/></div>)}
+              </div>)})}</div>
+          </div>)})}</div>)}
+
+        {/* LEGEND */}
+        <div style={{marginTop:20,padding:"12px 18px",background:"rgba(255,255,255,0.02)",border:"1px solid rgba(255,255,255,0.06)",borderRadius:14,display:"flex",gap:10,flexWrap:"wrap",alignItems:"center"}}>
+          {PO.map(p=>(<div key={p} style={{display:"flex",alignItems:"center",gap:4}}><div style={{width:7,height:7,borderRadius:3,background:PC[p]?.bar||"#64748b"}}/><span style={{fontSize:10,color:"#64748b"}}>{p}</span></div>))}
+          <div style={{display:"flex",alignItems:"center",gap:5,marginLeft:"auto"}}><span style={{color:"#ef4444",fontSize:10}}>●</span><span style={{fontSize:10,color:"#64748b"}}>Risk</span><span style={{color:"#22c55e",fontSize:10,marginLeft:6}}>✓</span><span style={{fontSize:10,color:"#64748b"}}>Done</span></div>
+        </div>
+
+        {/* FOOTER */}
+        <div style={{marginTop:12,padding:"10px 4px",fontSize:10,color:"#334155",lineHeight:1.6,textAlign:"center"}}>
+          {town.fullName} — {town.chapterRef} (eff. {town.effectiveDate}) · {town.county} · V6 Multi-Town · Progress saves automatically · Not legal advice
+        </div>
+      </div>
+
+      <style>{`
+        @keyframes fadeSlideIn{from{opacity:0;transform:translateY(12px)}to{opacity:1;transform:translateY(0)}}
+        ::-webkit-scrollbar{width:6px;height:6px}::-webkit-scrollbar-track{background:transparent}::-webkit-scrollbar-thumb{background:rgba(255,255,255,0.08);border-radius:3px}
+        select option{background:#1e293b;color:#e2e8f0}input[type="date"]::-webkit-calendar-picker-indicator{filter:invert(0.7)}
+      `}</style>
+    </div>
+  );
+}
+// Development Manager — V8 PRO features
+// This is "page 2" — loaded when user creates/opens a development
+
+function DevManager({devId,onBack}){
+  const[devData,setDevData]=useState(()=>loadDevData(devId));
+  const[activeTab,setActiveTab]=useState("overview");
+  const[selectedTask,setSelectedTask]=useState(null);
+  const[saveLabel,setSaveLabel]=useState("Saved");
+  const saveTimer=useRef(null);
+
+  const town=devData?TOWNS[devData.townId]:null;
+  const schedule=useMemo(()=>devData?computeSchedule(devData.tasks):{},[devData?.tasks]);
+  const statuses=devData?.statuses||{};
+
+  const persist=(newData)=>{
+    setDevData(newData);setSaveLabel("Saving...");
+    clearTimeout(saveTimer.current);
+    saveTimer.current=setTimeout(()=>{saveDevData(newData.id,newData);setSaveLabel("Saved "+new Date().toLocaleTimeString())},1500);
+  };
+
+  const handleStatusChange=(taskId,newStatus)=>{
+    if(!devData)return;
+    persist({...devData,statuses:{...devData.statuses,[taskId]:newStatus}});
+  };
+
+  if(!devData||!town)return(
+    <div style={{fontFamily:S.fontFamily,background:"#0c0f1a",minHeight:"100vh",display:"flex",alignItems:"center",justifyContent:"center",color:"#64748b"}}>
+      <div style={{textAlign:"center"}}>
+        <div style={{fontSize:32,marginBottom:16}}>⚠</div>
+        <div>Development not found</div>
+        <button onClick={onBack} style={{marginTop:16,background:"rgba(99,102,241,0.1)",border:"1px solid rgba(99,102,241,0.3)",borderRadius:8,padding:"8px 20px",color:"#a5b4fc",cursor:"pointer",fontFamily:S.fontFamily}}>← Back to Tracker</button>
+      </div>
+    </div>
+  );
+
+  const tasks=devData.tasks;
+  const PO=town.phaseOrder;
+  const total=tasks.length;
+  const complete=tasks.filter(t=>(statuses[t.id]||"not_started")==="complete").length;
+  const inProg=tasks.filter(t=>(statuses[t.id]||"not_started")==="in_progress").length;
+  const blocked=tasks.filter(t=>(statuses[t.id]||"not_started")==="blocked").length;
+  const waiting=tasks.filter(t=>(statuses[t.id]||"not_started")==="waiting").length;
+  const risks=tasks.filter(t=>t.risk).length;
+  const pct=total?Math.round(complete/total*100):0;
+  const maxEnd=Math.max(...Object.values(schedule).map(s=>s.endDay||0),1);
+  const startDate=devData.startDate||new Date().toISOString().slice(0,10);
+
+  const TABS=[
+    {key:"overview",label:"Overview",icon:"◉"},
+    {key:"tasks",label:"Tasks",icon:"☰"},
+    {key:"timeline",label:"Timeline",icon:"▦"},
+    {key:"risks",label:"Risks",icon:"⚠"},
+    {key:"contacts",label:"Contacts",icon:"☎"},
+    {key:"costs",label:"Costs",icon:"$"},
+    {key:"docs",label:"Docs",icon:"📋"},
+    {key:"notes",label:"Notes",icon:"✎"},
+    {key:"milestones",label:"Milestones",icon:"◆"},
+    {key:"compare",label:"Compare",icon:"⇆"},
+    {key:"export",label:"Export",icon:"↓"},
+    {key:"settings",label:"Settings",icon:"⚙"},
+  ];
+
+  return(
+    <div style={{fontFamily:S.fontFamily,background:"linear-gradient(145deg,#0c0f1a 0%,#111827 50%,#0c1220 100%)",minHeight:"100vh",color:"#e2e8f0"}}>
+      {/* Header */}
+      <div style={{padding:"12px 20px",borderBottom:"1px solid rgba(255,255,255,0.06)",display:"flex",alignItems:"center",gap:12,flexWrap:"wrap"}}>
+        <button onClick={onBack} style={{background:"rgba(255,255,255,0.04)",border:"1px solid rgba(255,255,255,0.08)",borderRadius:8,padding:"6px 12px",color:"#94a3b8",cursor:"pointer",fontFamily:S.fontFamily,fontSize:12}}>← Tracker</button>
+        <div style={{flex:1,minWidth:200}}>
+          <h1 style={{fontSize:18,fontWeight:700,letterSpacing:"-0.02em"}}>{devData.name}</h1>
+          <span style={{fontSize:11,color:"#64748b"}}>{town.label} — {town.county} — {town.chapterRef}</span>
+        </div>
+        <span style={{fontSize:10,color:"#475569"}}>{saveLabel}</span>
+      </div>
+
+      {/* Tab nav */}
+      <div style={{padding:"0 20px",borderBottom:"1px solid rgba(255,255,255,0.06)",display:"flex",gap:2,overflowX:"auto"}}>
+        {TABS.map(tab=>(
+          <button key={tab.key} onClick={()=>setActiveTab(tab.key)} style={{padding:"10px 14px",background:activeTab===tab.key?"rgba(99,102,241,0.12)":"transparent",border:"none",borderBottom:activeTab===tab.key?"2px solid #6366f1":"2px solid transparent",color:activeTab===tab.key?"#a5b4fc":"#64748b",fontSize:12,cursor:"pointer",fontFamily:S.fontFamily,fontWeight:activeTab===tab.key?600:400,whiteSpace:"nowrap",display:"flex",alignItems:"center",gap:5}}>
+            <span style={{fontSize:13}}>{tab.icon}</span>{tab.label}
+          </button>
+        ))}
+      </div>
+
+      {/* Content */}
+      <div style={{padding:20,maxWidth:1400,margin:"0 auto"}}>
+
+        {/* OVERVIEW */}
+        {activeTab==="overview"&&(
+          <div style={{animation:"fadeSlideIn 0.3s ease"}}>
+            <div style={{display:"grid",gridTemplateColumns:"repeat(auto-fit,minmax(160px,1fr))",gap:12,marginBottom:24}}>
+              <StatCard label="Progress" value={`${pct}%`} sub={`${complete} of ${total} tasks`} color="#6366f1"/>
+              <StatCard label="In Progress" value={inProg} icon="◐" color="#f59e0b"/>
+              <StatCard label="Blocked" value={blocked} icon="⊘" color="#ef4444"/>
+              <StatCard label="Duration" value={`${maxEnd}d`} sub={`${fmtDate(startDate)} → ${fmtDate(addDays(startDate,maxEnd))}`} color="#06b6d4"/>
+              <StatCard label="Risks" value={risks} icon="⚠" color="#ef4444"/>
+              <StatCard label="Waiting" value={waiting} icon="◷" color="#fb923c"/>
+            </div>
+            {tasks.find(t=>(statuses[t.id]||"not_started")==="in_progress")&&(
+              <div style={{background:"rgba(245,158,11,0.08)",border:"1px solid rgba(245,158,11,0.2)",borderRadius:12,padding:16,marginBottom:24}}>
+                <div style={{fontSize:11,color:"#f59e0b",fontWeight:600,marginBottom:4}}>ACTIVE TASK</div>
+                {(()=>{const t=tasks.find(t=>(statuses[t.id]||"not_started")==="in_progress");return t?(<div><div style={{fontSize:15,fontWeight:500}}>{t.name}</div><div style={{fontSize:12,color:"#64748b",marginTop:4}}>{t.responsible} — {t.phase}</div></div>):null})()}
+              </div>
+            )}
+            <h3 style={{fontSize:13,fontWeight:600,marginBottom:12,textTransform:"uppercase",letterSpacing:"0.5px",color:"#64748b"}}>Phase Progress</h3>
+            {PO.map(p=>{const pts=tasks.filter(t=>t.phase===p);const pc=pts.filter(t=>(statuses[t.id]||"not_started")==="complete").length;const ppct=pts.length?Math.round(pc/pts.length*100):0;return(
+              <div key={p} style={{display:"flex",alignItems:"center",gap:12,marginBottom:8}}>
+                <div style={{width:180,fontSize:12,color:"#64748b",overflow:"hidden",textOverflow:"ellipsis",whiteSpace:"nowrap"}}>{p}</div>
+                <div style={{flex:1,background:"rgba(255,255,255,0.04)",borderRadius:4,height:20,position:"relative",overflow:"hidden"}}>
+                  <div style={{height:"100%",width:`${ppct}%`,background:gpc(p).bar,borderRadius:4,transition:"width 0.5s"}}/>
+                  <span style={{position:"absolute",right:8,top:2,fontSize:10,fontFamily:S.monoFont,color:"#64748b"}}>{pc}/{pts.length}</span>
+                </div>
+                <span style={{width:36,fontSize:12,fontFamily:S.monoFont,color:gpc(p).bar,textAlign:"right"}}>{ppct}%</span>
+              </div>
+            )})}
+            <div style={{background:"rgba(255,255,255,0.02)",border:"1px solid rgba(255,255,255,0.06)",borderRadius:12,padding:16,marginTop:20}}>
+              <div style={{fontSize:13,fontWeight:600,marginBottom:8}}>Town Information</div>
+              <div style={{fontSize:12,color:"#64748b",lineHeight:1.6}}>{town.notes}</div>
+            </div>
+          </div>
+        )}
+
+        {/* TASKS */}
+        {activeTab==="tasks"&&(
+          <div style={{animation:"fadeSlideIn 0.3s ease"}}>
+            {PO.map(phase=>{const pT=tasks.filter(t=>t.phase===phase);if(!pT.length)return null;return(
+              <div key={phase} style={{marginBottom:20}}>
+                <div style={{display:"flex",alignItems:"center",gap:8,marginBottom:10}}><span style={{width:10,height:10,borderRadius:"50%",background:gpc(phase).bar}}/><span style={{fontSize:14,fontWeight:600}}>{phase}</span><span style={{fontSize:11,color:"#475569"}}>({pT.length})</span></div>
+                {pT.map(task=>{const st=statuses[task.id]||"not_started";return(
+                  <div key={task.id} onClick={()=>setSelectedTask(task)} style={{display:"flex",alignItems:"center",gap:10,padding:"8px 12px",borderRadius:8,marginBottom:2,cursor:"pointer"}} onMouseEnter={e=>e.currentTarget.style.background="rgba(255,255,255,0.02)"} onMouseLeave={e=>e.currentTarget.style.background="transparent"}>
+                    <StatusButton status={st} onClick={()=>handleStatusChange(task.id,nextStatus(st))} size={24}/>
+                    <div style={{flex:1,minWidth:0}}>
+                      <div style={{fontSize:13,fontWeight:500,overflow:"hidden",textOverflow:"ellipsis",whiteSpace:"nowrap"}}>{task.name}</div>
+                      <div style={{fontSize:11,color:"#475569"}}>{task.responsible}</div>
+                    </div>
+                    <div style={{fontFamily:S.monoFont,fontSize:11,color:"#475569",whiteSpace:"nowrap"}}>{task.min}/{task.avg}/{task.max}d</div>
+                    {task.risk&&<span style={{fontSize:12,color:"#ef4444"}}>⚠</span>}
+                  </div>
+                )})}
+              </div>
+            )})}
+          </div>
+        )}
+
+        {/* TIMELINE (Gantt) */}
+        {activeTab==="timeline"&&(
+          <DevGantt tasks={tasks} statuses={statuses} schedule={schedule} town={town} startDate={startDate} onStatusChange={handleStatusChange} onSelectTask={setSelectedTask}/>
+        )}
+
+        {/* RISKS */}
+        {activeTab==="risks"&&(
+          <div style={{animation:"fadeSlideIn 0.3s ease"}}>
+            <div style={{fontSize:12,color:"#64748b",marginBottom:16}}>{risks} risk-flagged tasks</div>
+            {tasks.filter(t=>t.risk).map(task=>{const st=statuses[task.id]||"not_started";const stObj=getStatus(st);const rd=task.riskDesc||task.risk_desc||"";return(
+              <div key={task.id} style={{background:"rgba(255,255,255,0.02)",border:"1px solid rgba(255,255,255,0.06)",borderRadius:10,padding:16,marginBottom:8}}>
+                <div style={{display:"flex",justifyContent:"space-between",alignItems:"flex-start",gap:12}}>
+                  <div><div style={{fontSize:14,fontWeight:500,marginBottom:4}}>{task.name}</div><div style={{display:"flex",gap:8,alignItems:"center"}}><PhaseBadge phase={task.phase}/><span style={{fontSize:11,color:stObj.color}}>{stObj.icon} {stObj.label}</span></div></div>
+                  <span style={{fontFamily:S.monoFont,fontSize:11,color:"#475569"}}>{task.min}/{task.avg}/{task.max}d</span>
+                </div>
+                {rd&&<div style={{background:"rgba(239,68,68,0.08)",border:"1px solid rgba(239,68,68,0.15)",borderRadius:6,padding:"8px 12px",fontSize:12,color:"#fca5a5",marginTop:8}}>⚠ {rd}</div>}
+              </div>
+            )})}
+          </div>
+        )}
+
+        {/* CONTACTS */}
+        {activeTab==="contacts"&&(
+          <div style={{animation:"fadeSlideIn 0.3s ease"}}>
+            <div style={{display:"grid",gridTemplateColumns:"repeat(auto-fit,minmax(280px,1fr))",gap:12}}>
+              {getContacts(town).map(g=>(
+                <div key={g.group} style={{background:"rgba(255,255,255,0.02)",border:"1px solid rgba(255,255,255,0.06)",borderRadius:10,padding:16}}>
+                  <div style={{fontSize:13,fontWeight:600,marginBottom:10,color:"#6366f1"}}>{g.group}</div>
+                  {g.items.map((item,i)=>(<div key={i} style={{display:"flex",gap:8,marginBottom:6,fontSize:12}}><span style={{color:"#475569",minWidth:60}}>{item.label}:</span><span>{item.value}</span></div>))}
+                </div>
+              ))}
+            </div>
+          </div>
+        )}
+
+        {/* COSTS */}
+        {activeTab==="costs"&&(
+          <div style={{animation:"fadeSlideIn 0.3s ease",display:"grid",gridTemplateColumns:"repeat(auto-fit,minmax(300px,1fr))",gap:12}}>
+            {COST_ESTIMATES.map(cat=>(
+              <div key={cat.category} style={{background:"rgba(255,255,255,0.02)",border:"1px solid rgba(255,255,255,0.06)",borderRadius:10,padding:16}}>
+                <div style={{fontSize:13,fontWeight:600,marginBottom:12,color:"#6366f1"}}>{cat.category}</div>
+                {cat.items.map((item,i)=>(<div key={i} style={{display:"flex",justifyContent:"space-between",marginBottom:8,fontSize:12}}><span style={{color:"#64748b"}}>{item.name}</span><span style={{fontFamily:S.monoFont}}>{item.range}</span></div>))}
+              </div>
+            ))}
+          </div>
+        )}
+
+        {/* DOCS */}
+        {activeTab==="docs"&&(<DevDocs/>)}
+
+        {/* NOTES */}
+        {activeTab==="notes"&&(
+          <DevNotes devData={devData} onSave={notes=>persist({...devData,notes})}/>
+        )}
+
+        {/* MILESTONES */}
+        {activeTab==="milestones"&&(
+          <div style={{animation:"fadeSlideIn 0.3s ease"}}>
+            {tasks.filter(t=>t.category==="Milestone").map(task=>{const st=statuses[task.id]||"not_started";const stObj=getStatus(st);const sc=schedule[task.id];return(
+              <div key={task.id} style={{background:"rgba(255,255,255,0.02)",border:"1px solid rgba(255,255,255,0.06)",borderRadius:10,padding:14,display:"flex",alignItems:"center",gap:12,marginBottom:8}}>
+                <span style={{fontSize:20,color:stObj.color}}>{stObj.icon}</span>
+                <div style={{flex:1}}><div style={{fontSize:13,fontWeight:500}}>{task.name}</div><div style={{display:"flex",gap:8,alignItems:"center",marginTop:2}}><PhaseBadge phase={task.phase}/><span style={{fontSize:11,color:"#475569"}}>Est: {sc?fmtDate(addDays(startDate,sc.startDay)):"—"}</span></div></div>
+                <span style={{fontSize:11,color:stObj.color,fontWeight:500}}>{stObj.label}</span>
+              </div>
+            )})}
+          </div>
+        )}
+
+        {/* COMPARE */}
+        {activeTab==="compare"&&(<DevCompare/>)}
+
+        {/* EXPORT */}
+        {activeTab==="export"&&(
+          <div style={{animation:"fadeSlideIn 0.3s ease"}}>
+            <button onClick={()=>{const b=new Blob([JSON.stringify(devData,null,2)],{type:"application/json"});const u=URL.createObjectURL(b);const a=document.createElement("a");a.href=u;a.download=`${devData.name.replace(/\s+/g,"_")}_export.json`;a.click();URL.revokeObjectURL(u)}} style={{background:"#6366f1",border:"none",borderRadius:8,padding:"10px 24px",color:"#fff",fontSize:13,fontWeight:500,cursor:"pointer",fontFamily:S.fontFamily}}>Download JSON</button>
+            <div style={{background:"rgba(255,255,255,0.02)",border:"1px solid rgba(255,255,255,0.06)",borderRadius:10,padding:16,marginTop:20,maxHeight:400,overflow:"auto"}}><pre style={{fontSize:11,fontFamily:S.monoFont,color:"#64748b",whiteSpace:"pre-wrap"}}>{JSON.stringify(devData,null,2).slice(0,3000)}...</pre></div>
+          </div>
+        )}
+
+        {/* SETTINGS */}
+        {activeTab==="settings"&&(
+          <DevSettings devData={devData} town={town} onSave={persist} onDelete={()=>{deleteDevStorage(devData.id);const l=loadDevList().filter(d=>d.id!==devData.id);saveDevList(l);onBack()}} onBack={onBack}/>
+        )}
+      </div>
+
+      {/* Task Detail Modal */}
+      {selectedTask&&(
+        <div onClick={()=>setSelectedTask(null)} style={{position:"fixed",inset:0,background:"rgba(0,0,0,0.7)",display:"flex",alignItems:"center",justifyContent:"center",zIndex:1000,padding:20}}>
+          <div onClick={e=>e.stopPropagation()} style={{background:"#0f1225",border:"1px solid rgba(255,255,255,0.08)",borderRadius:16,padding:0,maxWidth:600,width:"100%",maxHeight:"85vh",overflow:"auto",animation:"fadeSlideIn 0.3s ease"}}>
+            <div style={{padding:"20px 24px",borderBottom:"1px solid rgba(255,255,255,0.06)"}}>
+              <div style={{display:"flex",justifyContent:"space-between",alignItems:"flex-start",gap:12}}>
+                <div><h3 style={{fontSize:18,fontWeight:600,marginBottom:8}}>{selectedTask.name}</h3><div style={{display:"flex",gap:8,flexWrap:"wrap",alignItems:"center"}}><PhaseBadge phase={selectedTask.phase}/><span style={{fontSize:11,color:"#64748b"}}>{selectedTask.category}</span>{selectedTask.risk&&<span style={{fontSize:11,color:"#ef4444",fontWeight:600}}>⚠ RISK</span>}</div></div>
+                <button onClick={()=>setSelectedTask(null)} style={{background:"none",border:"none",color:"#64748b",fontSize:22,cursor:"pointer"}}>×</button>
+              </div>
+            </div>
+            <div style={{padding:"16px 24px"}}>
+              <div style={{marginBottom:16}}><div style={{fontSize:11,color:"#64748b",marginBottom:8,textTransform:"uppercase",letterSpacing:"0.5px"}}>Status</div>
+                <div style={{display:"grid",gridTemplateColumns:"repeat(3,1fr)",gap:6}}>
+                  {STATUSES.map(st=>{const cur=statuses[selectedTask.id]||"not_started";return(
+                    <button key={st.key} onClick={()=>handleStatusChange(selectedTask.id,st.key)} style={{padding:"8px 12px",borderRadius:8,fontSize:12,fontWeight:500,cursor:"pointer",display:"flex",alignItems:"center",gap:6,border:cur===st.key?`2px solid ${st.color}`:"1px solid rgba(255,255,255,0.06)",background:cur===st.key?`${st.color}22`:"rgba(255,255,255,0.02)",color:cur===st.key?st.color:"#64748b",boxShadow:cur===st.key?`0 0 12px ${st.color}33`:"none",fontFamily:S.fontFamily}}><span>{st.icon}</span>{st.label}</button>
+                  )})}
+                </div>
+              </div>
+              <div style={{display:"grid",gridTemplateColumns:"1fr 1fr",gap:12,marginBottom:16}}>
+                <div style={{background:"rgba(255,255,255,0.02)",borderRadius:8,padding:12}}><div style={{fontSize:11,color:"#64748b",marginBottom:4}}>Duration</div><div style={{fontFamily:S.monoFont,fontSize:14}}><span style={{color:"#22c55e"}}>{selectedTask.min}d</span> / <span style={{color:"#f59e0b"}}>{selectedTask.avg}d</span> / <span style={{color:"#ef4444"}}>{selectedTask.max}d</span></div></div>
+                <div style={{background:"rgba(255,255,255,0.02)",borderRadius:8,padding:12}}><div style={{fontSize:11,color:"#64748b",marginBottom:4}}>Responsible</div><div style={{fontSize:13}}>{selectedTask.responsible}</div></div>
+              </div>
+              {selectedTask.notes&&<div style={{marginBottom:16}}><div style={{fontSize:11,color:"#64748b",marginBottom:6,textTransform:"uppercase"}}>Notes</div><div style={{background:"rgba(255,255,255,0.02)",borderRadius:8,padding:12,fontSize:13,lineHeight:1.5,color:"#94a3b8"}}>{selectedTask.notes}</div></div>}
+              {selectedTask.risk&&(selectedTask.riskDesc||selectedTask.risk_desc)&&<div style={{background:"rgba(239,68,68,0.08)",border:"1px solid rgba(239,68,68,0.2)",borderRadius:8,padding:12}}><div style={{fontSize:11,color:"#ef4444",fontWeight:600,marginBottom:4}}>⚠ Risk</div><div style={{fontSize:13,color:"#fca5a5"}}>{selectedTask.riskDesc||selectedTask.risk_desc}</div></div>}
+            </div>
+          </div>
+        </div>
+      )}
+    </div>
+  );
+}
+
+// Sub-components for DevManager tabs
+
+function DevGantt({tasks,statuses,schedule,town,startDate,onStatusChange,onSelectTask}){
+  const[zoom,setZoom]=useState("month");
+  const PO=town.phaseOrder;
+  const maxEnd=Math.max(...Object.values(schedule).map(s=>s.endDay||0),1);
+  const dayW={week:8,month:3,quarter:1}[zoom]||3;
+  const months=[];const startD=new Date(startDate);
+  for(let d=0;d<maxEnd+30;d+=30){const dt=addDays(startD,d);months.push({day:d,label:dt.toLocaleDateString("en-US",{month:"short",year:"2-digit"})});}
+  return(
+    <div style={{animation:"fadeSlideIn 0.3s ease"}}>
+      <div style={{display:"flex",gap:4,marginBottom:12}}>
+        {["week","month","quarter"].map(z=>(<button key={z} onClick={()=>setZoom(z)} style={{padding:"4px 10px",borderRadius:6,border:zoom===z?"1px solid #6366f1":"1px solid rgba(255,255,255,0.06)",background:zoom===z?"rgba(99,102,241,0.1)":"transparent",color:zoom===z?"#a5b4fc":"#64748b",fontSize:11,cursor:"pointer",textTransform:"capitalize",fontFamily:S.fontFamily}}>{z}</button>))}
+      </div>
+      <div style={{overflow:"auto",border:"1px solid rgba(255,255,255,0.06)",borderRadius:12}}>
+        <div style={{display:"flex",minWidth:260+maxEnd*dayW+200}}>
+          <div style={{width:260,minWidth:260,position:"sticky",left:0,zIndex:10,background:"#0c0f1a"}}>
+            <div style={{height:28,borderBottom:"1px solid rgba(255,255,255,0.06)",padding:"0 12px",display:"flex",alignItems:"center",fontSize:10,color:"#475569",fontWeight:600}}>TASK</div>
+            {tasks.map(task=>{const st=statuses[task.id]||"not_started";return(
+              <div key={task.id} onClick={()=>onSelectTask(task)} style={{height:32,display:"flex",alignItems:"center",gap:5,padding:"0 8px",cursor:"pointer",borderBottom:"1px solid rgba(255,255,255,0.03)"}} onMouseEnter={e=>e.currentTarget.style.background="rgba(255,255,255,0.02)"} onMouseLeave={e=>e.currentTarget.style.background="transparent"}>
+                <StatusButton status={st} onClick={()=>onStatusChange(task.id,nextStatus(st))} size={18}/>
+                <span style={{width:5,height:5,borderRadius:"50%",background:gpc(task.phase).bar}}/>
+                <span style={{fontSize:10,overflow:"hidden",textOverflow:"ellipsis",whiteSpace:"nowrap",flex:1}}>{task.name}</span>
+                {task.risk&&<span style={{fontSize:9,color:"#ef4444"}}>⚠</span>}
+              </div>
+            )})}
+          </div>
+          <div style={{flex:1}}>
+            <div style={{height:28,borderBottom:"1px solid rgba(255,255,255,0.06)",position:"relative"}}>
+              {months.map((m,i)=>(<div key={i} style={{position:"absolute",left:m.day*dayW,fontSize:9,color:"#475569",padding:"0 4px",lineHeight:"28px",borderLeft:"1px solid rgba(255,255,255,0.04)"}}>{m.label}</div>))}
+            </div>
+            {tasks.map(task=>{const sc=schedule[task.id];if(!sc)return null;const st=statuses[task.id]||"not_started";let barColor=gpc(task.phase).bar;if(st==="complete")barColor="#22c55e";else if(st==="in_progress")barColor="#f59e0b";else if(st==="blocked")barColor="#ef4444";else if(st==="waiting")barColor="#fb923c";const isGlow=st==="in_progress"||st==="blocked";const barW=Math.max((sc.endDay-sc.startDay)*dayW,4);return(
+              <div key={task.id} onClick={()=>onSelectTask(task)} style={{height:32,position:"relative",borderBottom:"1px solid rgba(255,255,255,0.03)",cursor:"pointer"}}>
+                <div style={{position:"absolute",left:sc.startDay*dayW,top:7,height:18,width:barW,background:barColor,borderRadius:4,opacity:0.85,boxShadow:isGlow?`0 0 8px ${barColor}66`:"none"}}/>
+              </div>
+            )})}
+          </div>
+        </div>
+      </div>
+    </div>
+  );
+}
+
+function DevDocs(){
+  const[checked,setChecked]=useState({});
+  return(
+    <div style={{animation:"fadeSlideIn 0.3s ease",display:"flex",flexDirection:"column",gap:16}}>
+      {DOC_CHECKLIST.map(sec=>{const total=sec.items.length;const done=sec.items.filter((_,i)=>checked[sec.phase+"-"+i]).length;return(
+        <div key={sec.phase} style={{background:"rgba(255,255,255,0.02)",border:"1px solid rgba(255,255,255,0.06)",borderRadius:10,padding:16}}>
+          <div style={{display:"flex",justifyContent:"space-between",marginBottom:12}}><span style={{fontSize:13,fontWeight:600}}>{sec.phase}</span><span style={{fontSize:11,fontFamily:S.monoFont,color:done===total?"#22c55e":"#475569"}}>{done}/{total}</span></div>
+          {sec.items.map((item,i)=>{const key=sec.phase+"-"+i;return(<label key={i} style={{display:"flex",alignItems:"center",gap:8,padding:"4px 0",cursor:"pointer",fontSize:12,color:checked[key]?"#22c55e":"#94a3b8"}}><input type="checkbox" checked={!!checked[key]} onChange={()=>setChecked(p=>({...p,[key]:!p[key]}))} style={{accentColor:"#22c55e"}}/><span style={{textDecoration:checked[key]?"line-through":"none"}}>{item}</span></label>)})}
+        </div>
+      )})}
+    </div>
+  );
+}
+
+function DevNotes({devData,onSave}){
+  const[text,setText]=useState(devData.notes||"");
+  const[saved,setSaved]=useState(null);
+  const timer=useRef(null);
+  useEffect(()=>{setText(devData.notes||"")},[devData.id]);
+  const handleChange=v=>{setText(v);clearTimeout(timer.current);timer.current=setTimeout(()=>{onSave(v);setSaved(new Date())},1500)};
+  return(
+    <div style={{animation:"fadeSlideIn 0.3s ease",display:"flex",flexDirection:"column",height:"calc(100vh - 200px)"}}>
+      <div style={{display:"flex",justifyContent:"space-between",marginBottom:8}}><span style={{fontSize:13,fontWeight:600}}>Development Notes</span>{saved&&<span style={{fontSize:10,color:"#475569"}}>Saved {saved.toLocaleTimeString()}</span>}</div>
+      <textarea value={text} onChange={e=>handleChange(e.target.value)} placeholder="Add notes..." style={{flex:1,background:"rgba(255,255,255,0.02)",border:"1px solid rgba(255,255,255,0.06)",borderRadius:10,padding:16,color:"#e2e8f0",fontSize:13,lineHeight:1.6,resize:"none",outline:"none",fontFamily:S.fontFamily}}/>
+    </div>
+  );
+}
+
+function DevCompare(){
+  const data=useMemo(()=>TO.map(tid=>{const t=TOWNS[tid];const sc=computeSchedule(t.tasks);const maxEnd=Math.max(...Object.values(sc).map(s=>s.endDay||0));return{id:tid,label:t.label,county:t.county,tasks:t.tasks.length,days:maxEnd,risks:t.tasks.filter(tk=>tk.risk).length,phases:t.phaseOrder.length,notes:t.notes}}),[]);
+  return(
+    <div style={{animation:"fadeSlideIn 0.3s ease",overflowX:"auto"}}>
+      <table style={{width:"100%",borderCollapse:"collapse",fontSize:12}}>
+        <thead><tr style={{borderBottom:"2px solid rgba(255,255,255,0.06)"}}>
+          {["Town","County","Tasks","Duration","Risks","Phases","Notes"].map(h=>(<th key={h} style={{padding:"8px 12px",textAlign:"left",color:"#64748b",fontWeight:600,fontSize:11,textTransform:"uppercase"}}>{h}</th>))}
+        </tr></thead>
+        <tbody>{data.map(d=>(<tr key={d.id} style={{borderBottom:"1px solid rgba(255,255,255,0.04)"}}>
+          <td style={{padding:"10px 12px",fontWeight:500}}>{d.label}</td><td style={{padding:"10px 12px",color:"#64748b"}}>{d.county}</td><td style={{padding:"10px 12px",fontFamily:S.monoFont}}>{d.tasks}</td><td style={{padding:"10px 12px",fontFamily:S.monoFont}}>{d.days}d</td><td style={{padding:"10px 12px",fontFamily:S.monoFont,color:d.risks>10?"#ef4444":"inherit"}}>{d.risks}</td><td style={{padding:"10px 12px",fontFamily:S.monoFont}}>{d.phases}</td><td style={{padding:"10px 12px",color:"#475569",maxWidth:300,overflow:"hidden",textOverflow:"ellipsis",whiteSpace:"nowrap"}}>{d.notes}</td>
+        </tr>))}</tbody>
+      </table>
+    </div>
+  );
+}
+
+function DevSettings({devData,town,onSave,onDelete,onBack}){
+  const[name,setName]=useState(devData.name);
+  const[date,setDate]=useState(devData.startDate||new Date().toISOString().slice(0,10));
+  const[confirmDel,setConfirmDel]=useState(false);
+  return(
+    <div style={{animation:"fadeSlideIn 0.3s ease",maxWidth:480}}>
+      <div style={{marginBottom:20}}><label style={{fontSize:12,color:"#64748b",display:"block",marginBottom:6}}>Development Name</label><div style={{display:"flex",gap:8}}><input value={name} onChange={e=>setName(e.target.value)} style={{flex:1,background:"rgba(255,255,255,0.02)",border:"1px solid rgba(255,255,255,0.06)",borderRadius:8,padding:"8px 12px",color:"#e2e8f0",fontSize:13,fontFamily:S.fontFamily,outline:"none"}}/><button onClick={()=>{onSave({...devData,name});const l=loadDevList().map(d=>d.id===devData.id?{...d,name}:d);saveDevList(l)}} style={{background:"#6366f1",border:"none",borderRadius:8,padding:"8px 16px",color:"#fff",fontSize:12,cursor:"pointer",fontFamily:S.fontFamily}}>Save</button></div></div>
+      <div style={{marginBottom:20}}><label style={{fontSize:12,color:"#64748b",display:"block",marginBottom:6}}>Start Date</label><input type="date" value={date} onChange={e=>{setDate(e.target.value);onSave({...devData,startDate:e.target.value})}} style={{background:"rgba(255,255,255,0.02)",border:"1px solid rgba(255,255,255,0.06)",borderRadius:8,padding:"8px 12px",color:"#e2e8f0",fontSize:13,fontFamily:S.fontFamily,outline:"none"}}/></div>
+      <div style={{background:"rgba(255,255,255,0.02)",border:"1px solid rgba(255,255,255,0.06)",borderRadius:10,padding:16,marginBottom:20}}><div style={{fontSize:13,fontWeight:600,marginBottom:8}}>Town: {town.label}</div><div style={{fontSize:12,color:"#64748b"}}>{town.county} — {town.chapterRef}</div><div style={{fontSize:11,color:"#475569",marginTop:8}}>{town.notes}</div></div>
+      <div style={{borderTop:"1px solid rgba(255,255,255,0.06)",paddingTop:20}}>
+        {!confirmDel?(<button onClick={()=>setConfirmDel(true)} style={{background:"rgba(239,68,68,0.1)",border:"1px solid rgba(239,68,68,0.3)",borderRadius:8,padding:"8px 20px",color:"#ef4444",fontSize:12,cursor:"pointer",fontFamily:S.fontFamily}}>Delete Development</button>):(
+          <div style={{display:"flex",gap:8,alignItems:"center"}}><span style={{fontSize:12,color:"#ef4444"}}>Confirm delete?</span><button onClick={onDelete} style={{background:"#ef4444",border:"none",borderRadius:8,padding:"8px 16px",color:"#fff",fontSize:12,cursor:"pointer",fontFamily:S.fontFamily}}>Yes</button><button onClick={()=>setConfirmDel(false)} style={{background:"rgba(255,255,255,0.04)",border:"1px solid rgba(255,255,255,0.06)",borderRadius:8,padding:"8px 16px",color:"#94a3b8",fontSize:12,cursor:"pointer",fontFamily:S.fontFamily}}>Cancel</button></div>
+        )}
+      </div>
+    </div>
+  );
+}
+
+
+// === APP SHELL ===
+// App Shell — Routes between TrackerView and DevManager
+
+function App(){
+  // page: "tracker" | "new-dev" | "dev:<id>"
+  const[page,setPage]=useState("tracker");
+  const[devList,setDevList]=useState(()=>loadDevList());
+
+  // "New Development" creation flow
+  const[showCreateModal,setShowCreateModal]=useState(false);
+  const[newDevName,setNewDevName]=useState("");
+  const[newDevTown,setNewDevTown]=useState(TO[0]);
+
+  const handleNewDev=()=>{
+    setShowCreateModal(true);
+  };
+
+  const handleCreateDev=()=>{
+    if(!newDevName.trim())return;
+    const id=genId();
+    const t=TOWNS[newDevTown];
+    if(!t)return;
+    const tasks=JSON.parse(JSON.stringify(t.tasks));
+    const statuses={};
+    tasks.forEach(tk=>{statuses[tk.id]="not_started"});
+    const newDev={id,name:newDevName.trim(),townId:newDevTown,tasks,statuses,startDate:new Date().toISOString().slice(0,10),notes:"",createdAt:new Date().toISOString()};
+    saveDevData(id,newDev);
+    const newList=[...devList,{id,name:newDev.name,townId:newDevTown,createdAt:newDev.createdAt}];
+    setDevList(newList);saveDevList(newList);
+    setNewDevName("");setShowCreateModal(false);
+    setPage("dev:"+id);
+  };
+
+  const handleOpenDev=(devId)=>{
+    setPage("dev:"+devId);
+  };
+
+  const handleBack=()=>{
+    setDevList(loadDevList()); // refresh list
+    setPage("tracker");
+  };
+
+  // If page is a dev, render DevManager
+  if(page.startsWith("dev:")){
+    const devId=page.slice(4);
+    return <DevManager devId={devId} onBack={handleBack}/>;
+  }
+
+  // Main tracker page
+  return(
+    <div>
+      <TrackerView onNewDev={handleNewDev}/>
+
+      {/* Development list bar at bottom */}
+      {devList.length>0&&(
+        <div style={{position:"fixed",bottom:0,left:0,right:0,background:"rgba(15,18,37,0.95)",borderTop:"1px solid rgba(255,255,255,0.08)",padding:"8px 20px",display:"flex",alignItems:"center",gap:8,zIndex:50,backdropFilter:"blur(12px)"}}>
+          <span style={{fontSize:11,color:"#475569",fontWeight:600,marginRight:4}}>DEVELOPMENTS:</span>
+          <div style={{display:"flex",gap:6,flex:1,overflowX:"auto"}}>
+            {devList.map(dev=>(
+              <button key={dev.id} onClick={()=>handleOpenDev(dev.id)} style={{background:"rgba(99,102,241,0.08)",border:"1px solid rgba(99,102,241,0.2)",borderRadius:8,padding:"5px 12px",color:"#a5b4fc",fontSize:11,cursor:"pointer",fontFamily:S.fontFamily,fontWeight:500,whiteSpace:"nowrap",display:"flex",alignItems:"center",gap:6}}>
+                <span style={{width:5,height:5,borderRadius:"50%",background:"#6366f1"}}/>
+                {dev.name} <span style={{color:"#475569"}}>({TOWNS[dev.townId]?.label||""})</span>
+              </button>
+            ))}
+          </div>
+        </div>
+      )}
+
+      {/* Create Development Modal */}
+      {showCreateModal&&(
+        <div onClick={()=>setShowCreateModal(false)} style={{position:"fixed",inset:0,background:"rgba(0,0,0,0.6)",display:"flex",alignItems:"center",justifyContent:"center",zIndex:1000}}>
+          <div onClick={e=>e.stopPropagation()} style={{background:"#0f1225",border:"1px solid rgba(255,255,255,0.08)",borderRadius:16,padding:28,width:420,maxWidth:"90vw",animation:"fadeSlideIn 0.3s ease"}}>
+            <h2 style={{fontSize:18,fontWeight:700,marginBottom:4,fontFamily:S.fontFamily}}>New Development</h2>
+            <p style={{fontSize:12,color:"#64748b",marginBottom:20}}>Create a project from a town template</p>
+
+            <label style={{fontSize:12,color:"#94a3b8",display:"block",marginBottom:6}}>Development Name</label>
+            <input value={newDevName} onChange={e=>setNewDevName(e.target.value)} placeholder="e.g. Maple Ridge Estates" onKeyDown={e=>e.key==="Enter"&&handleCreateDev()} style={{width:"100%",background:"rgba(255,255,255,0.04)",border:"1px solid rgba(255,255,255,0.08)",borderRadius:8,padding:"10px 14px",color:"#e2e8f0",fontSize:14,fontFamily:S.fontFamily,outline:"none",marginBottom:16}}/>
+
+            <label style={{fontSize:12,color:"#94a3b8",display:"block",marginBottom:6}}>Town Template</label>
+            <div style={{display:"grid",gap:6,marginBottom:20}}>
+              {TO.map(tid=>{const t=TOWNS[tid];const isS=newDevTown===tid;return(
+                <div key={tid} onClick={()=>setNewDevTown(tid)} style={{background:isS?"rgba(99,102,241,0.12)":"rgba(255,255,255,0.02)",border:isS?"1px solid rgba(99,102,241,0.4)":"1px solid rgba(255,255,255,0.06)",borderRadius:10,padding:"10px 14px",cursor:"pointer",display:"flex",justifyContent:"space-between",alignItems:"center",transition:"all 0.15s"}}>
+                  <div>
+                    <div style={{fontSize:13,fontWeight:isS?600:400,color:isS?"#e2e8f0":"#94a3b8"}}>{t.label}</div>
+                    <div style={{fontSize:10,color:"#475569"}}>{t.county} — {t.tasks.length} tasks — {t.chapterRef}</div>
+                  </div>
+                  {isS&&<span style={{color:"#6366f1",fontSize:14}}>●</span>}
+                </div>
+              )})}
+            </div>
+
+            <div style={{display:"flex",gap:8,justifyContent:"flex-end"}}>
+              <button onClick={()=>setShowCreateModal(false)} style={{background:"rgba(255,255,255,0.04)",border:"1px solid rgba(255,255,255,0.08)",borderRadius:8,padding:"9px 18px",color:"#94a3b8",fontSize:12,cursor:"pointer",fontFamily:S.fontFamily}}>Cancel</button>
+              <button onClick={handleCreateDev} disabled={!newDevName.trim()} style={{background:newDevName.trim()?"#6366f1":"rgba(99,102,241,0.3)",border:"none",borderRadius:8,padding:"9px 24px",color:"#fff",fontSize:12,fontWeight:600,cursor:newDevName.trim()?"pointer":"not-allowed",fontFamily:S.fontFamily}}>Create Development</button>
+            </div>
+          </div>
+        </div>
+      )}
+    </div>
+  );
+}
+
+ReactDOM.createRoot(document.getElementById('root')).render(React.createElement(App));
+</script>
+</body>
+</html>

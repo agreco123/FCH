@@ -1,0 +1,12 @@
+{
+  "name": "wny-v8-pro",
+  "version": "1.0.0",
+  "description": "WNY Land Development Command Center",
+  "main": "server.js",
+  "scripts": {
+    "start": "node server.js"
+  },
+  "dependencies": {
+    "express": "^4.21.0"
+  }
+}
