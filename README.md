@@ -1,44 +1,45 @@
-# WNY Land Development Command Center — V8 PRO
+# WNY Land Development Command Center — V9
 
 Multi-town residential subdivision tracker for Western New York. Tracks 7 towns across Erie & Niagara counties through the full municipal approval process.
+
+## V9 Changes (from V8 PRO)
+
+- **68 duration corrections** across all 7 towns (best/expected/worst refined against municipal code)
+- **4 missing tasks added:**
+  - Pendleton: USACE Section 404 Permit (p10d) + Highway Access Permit (p10e) → now 35 tasks
+  - Wheatfield: USACE Section 404 Permit (w13d) + Highway Access Permit (w13e) → now 40 tasks
+- Version references updated throughout
+
+## Task Counts by Town
+
+| Town | Tasks |
+|------|-------|
+| Amherst | 39 |
+| Clarence | 42 |
+| Hamburg | 36 |
+| Lancaster | 36 |
+| Orchard Park | 37 |
+| Pendleton | 35 |
+| Wheatfield | 40 |
+| **Total** | **265** |
 
 ## Architecture
 
 ```
-wny-v8-pro/
-├── public/
-│   └── index.html          ← Deployed HTML (built by build.sh)
-├── src/
-│   ├── data/
-│   │   ├── phases.js       ← Phase colors, statuses (~1KB)
-│   │   ├── amherst.js      ← 39 tasks (~5KB)
-│   │   ├── clarence.js     ← 42 tasks (~7KB)
-│   │   ├── hamburg.js      ← 36 tasks (~6KB)
-│   │   ├── lancaster.js    ← 36 tasks (~6KB)
-│   │   ├── orchardpark.js  ← 37 tasks (~7KB)
-│   │   ├── pendleton.js    ← 33 tasks (~6KB)
-│   │   ├── wheatfield.js   ← 38 tasks (~6KB)
-│   │   ├── towns.js        ← TOWNS config object (~3KB)
-│   │   └── reference.js    ← Costs, docs, contacts (~4KB)
-│   ├── components/
-│   │   └── shared.js       ← InlineEdit, PhaseSelect, StatusButton (~4KB)
-│   ├── views/
-│   │   ├── tracker.js      ← BASE: Township tracker (V6 core) (~15KB)
-│   │   └── dev-manager.js  ← NEW: Development management dashboard (~12KB)
-│   ├── utils.js            ← computeSchedule, storage, dates (~2KB)
-│   └── app.js              ← Root App component, routing (~5KB)
-├── scripts/
-│   └── build.sh            ← Concatenates src/ into public/index.html
-├── render.yaml             ← Render deployment config
+FCH/
+├── index.html       ← Single-file React app (all data + components)
+├── server.js        ← Express static server
+├── package.json     ← Node dependencies
+├── render.yaml      ← Render deployment config
 └── README.md
 ```
 
 ## Two-Page Design
 
 ### Page 1: Township Tracker (Base)
-The original V6 tracker. Select a town → see its Gantt chart, edit tasks inline, track completion, view risks. This is the **main landing page**.
+Select a town → see its Gantt chart, edit tasks inline, track completion, view risks. This is the **main landing page**.
 
-### Page 2: Development Manager (New)  
+### Page 2: Development Manager
 Click "New Development" → create a named project from any town template → get a full project dashboard with:
 - Overview stats, phase progress
 - Timeline (Gantt) with status cycling
@@ -48,34 +49,32 @@ Click "New Development" → create a named project from any town template → ge
 - Notes, export, settings
 - Compare all 7 towns side-by-side
 
-## Build & Deploy
+## Deploy
 
-### Local Development
+### GitHub Pages (Static)
+Push the repo. Set Pages to deploy from the `main` branch root. The `index.html` serves directly — no build step needed.
+
+### Render (Web Service)
+1. Push to GitHub
+2. Connect repo to Render as **Web Service**
+3. Runtime: **Node**
+4. Build command: `npm install`
+5. Start command: `npm start`
+
+### Local
 ```bash
 npm install
-npm run build
 npm start
 # Open http://localhost:3000
 ```
 
-### Deploy to Render (Web Service)
-1. Push to GitHub
-2. Connect repo to Render as **Web Service**
-3. Runtime: **Node**
-4. Build command: `npm install && npm run build`
-5. Start command: `npm start`
-6. Publish directory: *(leave blank)*
-
-### Deploy to GitHub Pages
-1. Run `npm run build` locally
-2. Push the `public/` folder to GitHub Pages
+Or just open `index.html` directly in a browser — no server required for local use.
 
 ## Tech Stack
 - React 18 (CDN)
 - Babel Standalone (CDN, JSX compilation)
-- No build tools required beyond `cat`
+- No build tools required
 - localStorage for persistence
-- Opens directly in any browser
 
 ## Data Sources
 Real municipal regulatory data from:
