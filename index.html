@@ -3,7 +3,7 @@
 <head>
 <meta charset="UTF-8"/>
 <meta name="viewport" content="width=device-width, initial-scale=1.0"/>
-<title>WNY Land Development Command Center — V9</title>
+<title>WNY Land Development Command Center — V10</title>
 <link rel="preconnect" href="https://fonts.googleapis.com"/>
 <link href="https://fonts.googleapis.com/css2?family=DM+Sans:ital,opsz,wght@0,9..40,300;0,9..40,400;0,9..40,500;0,9..40,600;0,9..40,700&family=JetBrains+Mono:wght@400;500;600&display=swap" rel="stylesheet"/>
 <style>
@@ -18,6 +18,10 @@ select option{background:#1e293b;color:#e2e8f0}
 input[type="date"]::-webkit-calendar-picker-indicator{filter:invert(0.7)}
 @keyframes fadeSlideIn{from{opacity:0;transform:translateY(12px)}to{opacity:1;transform:translateY(0)}}
 @keyframes pulse{0%,100%{opacity:1}50%{opacity:0.5}}
+.conn-dot{width:8px;height:8px;border-radius:50%;display:inline-block;margin-right:6px}
+.conn-green{background:#22c55e;box-shadow:0 0 6px rgba(34,197,94,0.5)}
+.conn-yellow{background:#f59e0b;box-shadow:0 0 6px rgba(245,158,11,0.5)}
+.conn-red{background:#ef4444;box-shadow:0 0 6px rgba(239,68,68,0.5)}
 </style>
 </head>
 <body>
@@ -25,11 +29,223 @@ input[type="date"]::-webkit-calendar-picker-indicator{filter:invert(0.7)}
 <script src="https://cdnjs.cloudflare.com/ajax/libs/react/18.2.0/umd/react.production.min.js"></script>
 <script src="https://cdnjs.cloudflare.com/ajax/libs/react-dom/18.2.0/umd/react-dom.production.min.js"></script>
 <script src="https://cdnjs.cloudflare.com/ajax/libs/babel-standalone/7.23.9/babel.min.js"></script>
+<script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2/dist/umd/supabase.min.js"></script>
 <script type="text/babel">
 const{useState,useEffect,useRef,useCallback,useMemo}=React;
 
-// === DATA LAYER ===
-// Phase colors — shared across tracker and dev manager
+// ============================================================================
+// V10 CONFIGURATION
+// ============================================================================
+const V10_VERSION = "V10-SUPABASE-EMPIRICAL";
+const V10_BUILD_DATE = "2026-03-25";
+const SUPABASE_URL = "https://cmymmhsdvrcjdyutjpnw.supabase.co";
+const SUPABASE_ANON_KEY = "PASTE_YOUR_ANON_KEY_HERE"; // <-- Replace with your anon key
+
+// ============================================================================
+// SUPABASE CLIENT + DATA ABSTRACTION LAYER
+// ============================================================================
+let supabase = null;
+let supabaseConnected = false;
+
+try {
+  if (window.supabase && SUPABASE_ANON_KEY !== "PASTE_YOUR_ANON_KEY_HERE") {
+    supabase = window.supabase.createClient(SUPABASE_URL, SUPABASE_ANON_KEY);
+    supabaseConnected = true;
+  }
+} catch (e) {
+  console.warn("Supabase init failed, using localStorage fallback:", e);
+}
+
+// Data abstraction layer — reads from Supabase with localStorage cache/fallback
+const DB = {
+  _cache: {},
+  _cacheKey: (table) => `wny-v10-cache-${table}`,
+
+  // Save to localStorage cache
+  _toCache(table, data) {
+    try {
+      localStorage.setItem(this._cacheKey(table), JSON.stringify({ data, ts: Date.now() }));
+      this._cache[table] = data;
+    } catch (e) {}
+  },
+
+  // Read from localStorage cache
+  _fromCache(table) {
+    if (this._cache[table]) return this._cache[table];
+    try {
+      const raw = localStorage.getItem(this._cacheKey(table));
+      if (raw) {
+        const parsed = JSON.parse(raw);
+        this._cache[table] = parsed.data;
+        return parsed.data;
+      }
+    } catch (e) {}
+    return null;
+  },
+
+  // Generic fetch with cache fallback
+  async fetch(table, query) {
+    if (!supabase) return this._fromCache(table) || [];
+    try {
+      const { data, error } = await (query || supabase.from(table).select('*'));
+      if (error) throw error;
+      this._toCache(table, data);
+      supabaseConnected = true;
+      return data || [];
+    } catch (e) {
+      console.warn(`Supabase fetch ${table} failed:`, e);
+      supabaseConnected = false;
+      return this._fromCache(table) || [];
+    }
+  },
+
+  // Fetch municipalities with their tasks (joined)
+  async fetchMunicipalities() {
+    const munis = await this.fetch('municipalities');
+    return munis;
+  },
+
+  // Fetch task templates for a municipality
+  async fetchTaskTemplates(municipalityId) {
+    if (!supabase) return this._fromCache(`tasks-${municipalityId}`) || [];
+    try {
+      const { data, error } = await supabase
+        .from('task_templates')
+        .select('*')
+        .eq('municipality_id', municipalityId)
+        .order('sort_order');
+      if (error) throw error;
+      this._toCache(`tasks-${municipalityId}`, data);
+      return data || [];
+    } catch (e) {
+      return this._fromCache(`tasks-${municipalityId}`) || [];
+    }
+  },
+
+  // Fetch all task templates (for initial load)
+  async fetchAllTaskTemplates() {
+    const data = await this.fetch('task_templates',
+      supabase?.from('task_templates').select('*').order('sort_order')
+    );
+    return data;
+  },
+
+  // Fetch developments
+  async fetchDevelopments() {
+    return this.fetch('developments',
+      supabase?.from('developments').select('*').order('created_at', { ascending: false })
+    );
+  },
+
+  // Fetch development tasks
+  async fetchDevTasks(developmentId) {
+    if (!supabase) return this._fromCache(`dev-tasks-${developmentId}`) || [];
+    try {
+      const { data, error } = await supabase
+        .from('development_tasks')
+        .select('*, task_template:task_templates(*)')
+        .eq('development_id', developmentId);
+      if (error) throw error;
+      this._toCache(`dev-tasks-${developmentId}`, data);
+      return data || [];
+    } catch (e) {
+      return this._fromCache(`dev-tasks-${developmentId}`) || [];
+    }
+  },
+
+  // Create a development
+  async createDevelopment(dev) {
+    if (!supabase) {
+      // localStorage fallback
+      const id = crypto.randomUUID?.() || Date.now().toString(36);
+      const newDev = { ...dev, id, created_at: new Date().toISOString() };
+      const list = JSON.parse(localStorage.getItem('wny-v10-dev-list') || '[]');
+      list.push(newDev);
+      localStorage.setItem('wny-v10-dev-list', JSON.stringify(list));
+      return newDev;
+    }
+    const { data, error } = await supabase.from('developments').insert(dev).select().single();
+    if (error) throw error;
+    return data;
+  },
+
+  // Create development tasks
+  async createDevTasks(tasks) {
+    if (!supabase) {
+      localStorage.setItem(`wny-v10-dev-tasks-${tasks[0]?.development_id}`, JSON.stringify(tasks));
+      return tasks;
+    }
+    const { data, error } = await supabase.from('development_tasks').insert(tasks).select();
+    if (error) throw error;
+    return data;
+  },
+
+  // Update development task status
+  async updateDevTaskStatus(taskId, status) {
+    if (!supabase) return;
+    const updates = { status, updated_at: new Date().toISOString() };
+    if (status === 'in_progress') updates.actual_start = new Date().toISOString().slice(0, 10);
+    if (status === 'complete') updates.actual_end = new Date().toISOString().slice(0, 10);
+    const { error } = await supabase.from('development_tasks').update(updates).eq('id', taskId);
+    if (error) console.error('Status update failed:', error);
+  },
+
+  // Update development
+  async updateDevelopment(id, updates) {
+    if (!supabase) {
+      const list = JSON.parse(localStorage.getItem('wny-v10-dev-list') || '[]');
+      const idx = list.findIndex(d => d.id === id);
+      if (idx >= 0) { list[idx] = { ...list[idx], ...updates }; localStorage.setItem('wny-v10-dev-list', JSON.stringify(list)); }
+      return;
+    }
+    const { error } = await supabase.from('developments').update(updates).eq('id', id);
+    if (error) console.error('Dev update failed:', error);
+  },
+
+  // Delete development
+  async deleteDevelopment(id) {
+    if (!supabase) {
+      const list = JSON.parse(localStorage.getItem('wny-v10-dev-list') || '[]').filter(d => d.id !== id);
+      localStorage.setItem('wny-v10-dev-list', JSON.stringify(list));
+      localStorage.removeItem(`wny-v10-dev-tasks-${id}`);
+      return;
+    }
+    await supabase.from('development_tasks').delete().eq('development_id', id);
+    await supabase.from('developments').delete().eq('id', id);
+  },
+
+  // Fetch reference data
+  async fetchCostEstimates() { return this.fetch('cost_estimates'); },
+  async fetchContacts() { return this.fetch('contacts'); },
+  async fetchDocChecklist() { return this.fetch('doc_checklist',
+    supabase?.from('doc_checklist').select('*').order('sort_order')
+  ); },
+  async fetchBoardMeetings(municipalityId) {
+    if (!supabase) return this._fromCache(`meetings-${municipalityId}`) || [];
+    try {
+      const { data, error } = await supabase
+        .from('board_meetings')
+        .select('*')
+        .eq('municipality_id', municipalityId)
+        .gte('meeting_date', new Date().toISOString().slice(0,10))
+        .order('meeting_date')
+        .limit(50);
+      if (error) throw error;
+      this._toCache(`meetings-${municipalityId}`, data);
+      return data || [];
+    } catch (e) {
+      return this._fromCache(`meetings-${municipalityId}`) || [];
+    }
+  },
+  async fetchHolidays() { return this.fetch('holidays'); },
+
+  // Connection status
+  isConnected() { return supabaseConnected; }
+};
+
+// ============================================================================
+// PHASE COLORS — shared across tracker and dev manager (unchanged from V9)
+// ============================================================================
 const PC = {
   "Pre-Application":          { bar: "#10b981", bg: "rgba(16,185,129,0.08)", border: "#10b981", glow: "rgba(16,185,129,0.2)" },
   "Sketch Plan":              { bar: "#f59e0b", bg: "rgba(245,158,11,0.08)", border: "#f59e0b", glow: "rgba(245,158,11,0.2)" },
@@ -50,7 +266,7 @@ const PC = {
 };
 const gpc=p=>PC[p]||{bar:"#64748b",bg:"rgba(100,116,139,0.08)",border:"#64748b",glow:"rgba(100,116,139,0.2)"};
 
-// 6-state status system (used by dev manager)
+// 6-state status system (unchanged from V9)
 const STATUSES=[
   {key:"not_started",label:"Not Started",icon:"○",color:"#475569"},
   {key:"in_progress",label:"In Progress",icon:"◐",color:"#f59e0b"},
@@ -62,371 +278,68 @@ const STATUSES=[
 const getStatus=k=>STATUSES.find(s=>s.key===k)||STATUSES[0];
 const nextStatus=k=>{const i=STATUSES.findIndex(s=>s.key===k);return STATUSES[(i+1)%STATUSES.length].key};
 
-// Style constants
+// Style constants (unchanged)
 const S={fontFamily:"'DM Sans',-apple-system,BlinkMacSystemFont,sans-serif",monoFont:"'JetBrains Mono',monospace"};
-// Town data: amherst
-const AT=[
-{id:"pre1",name:"Site Feasibility & Due Diligence",phase:"Pre-Application",category:"Applicant",min:21,avg:35,max:60,dependencies:[],responsible:"Applicant / Engineer",notes:"Title search, survey, zoning check, utility, flood zone, wetlands per NYSDEC.",confidence:"High",risk:false,risk_desc:""},
-{id:"pre2",name:"Boundary & Topographic Survey",phase:"Pre-Application",category:"Applicant",min:21,avg:42,max:75,dependencies:["pre1"],responsible:"NYS Licensed Surveyor",notes:"Required per §3-6. NAVD 1988 datum.",confidence:"High",risk:false,risk_desc:""},
-{id:"pre3",name:"Pre-Application Conference",phase:"Pre-Application",category:"Town",min:7,avg:14,max:30,dependencies:["pre1"],responsible:"Planning Director",notes:"MANDATORY per §4-2. Classifies Major/Minor per §4-3. (716) 631-7051.",confidence:"High",risk:false,risk_desc:""},
-{id:"pre4",name:"SEQR EAF Preparation",phase:"Pre-Application",category:"Applicant",min:14,avg:21,max:45,dependencies:["pre3"],responsible:"Environmental Consultant",notes:"Per §4-4-4A. Chapter 104 governs.",confidence:"High",risk:true,risk_desc:"Full EIS can add 6-18 months."},
-{id:"sk1",name:"Sketch Plan Preparation",phase:"Sketch Plan",category:"Applicant",min:30,avg:60,max:120,dependencies:["pre2","pre3","pre4"],responsible:"Applicant / PE",notes:"Per §4-6-1. Streets, lots, open space, drainage.",confidence:"High",risk:false,risk_desc:""},
-{id:"sk2",name:"Sketch Plan Submission & Completeness",phase:"Sketch Plan",category:"Town",min:5,avg:10,max:21,dependencies:["sk1"],responsible:"Planning Director",notes:"Fee to Town Clerk. Per §4-4-4. Void if not complete in 6 months.",confidence:"High",risk:false,risk_desc:""},
-{id:"sk3",name:"Agency Referrals",phase:"Sketch Plan",category:"Town",min:25,avg:35,max:50,dependencies:["sk2"],responsible:"Multiple Departments",notes:"Per §4-6-1B. 30 days from completeness.",confidence:"High",risk:false,risk_desc:""},
-{id:"sk4",name:"Planning Board Hearing - Sketch",phase:"Sketch Plan",category:"Town",min:21,avg:38,max:60,dependencies:["sk3"],responsible:"Planning Board",notes:"Per §4-6-1C. 1st & 3rd Thursdays. 62-day clock.",confidence:"High",risk:true,risk_desc:"Bi-monthly meetings avg ~15 day wait."},
-{id:"sk5",name:"Sketch Plan Approval (2-Year)",phase:"Sketch Plan",category:"Milestone",min:0,avg:0,max:0,dependencies:["sk4"],responsible:"Planning Board",notes:"Per §1-9-1. Expires 2 years.",confidence:"High",risk:false,risk_desc:""},
-{id:"pp1",name:"Preliminary Plat Preparation",phase:"Preliminary Plat",category:"Applicant",min:60,avg:120,max:210,dependencies:["sk5"],responsible:"Applicant / PE",notes:"Per §4-6-2. Full engineering drawings.",confidence:"High",risk:false,risk_desc:""},
-{id:"pp2",name:"Preliminary Plat Submission",phase:"Preliminary Plat",category:"Town",min:5,avg:14,max:21,dependencies:["pp1"],responsible:"Planning Director",notes:"SEQR determination required.",confidence:"High",risk:false,risk_desc:""},
-{id:"pp3",name:"SEQR Determination",phase:"Preliminary Plat",category:"Town",min:30,avg:45,max:90,dependencies:["pp2"],responsible:"Planning Board",notes:"Per Chapter 104. Neg Dec continues; Pos Dec triggers EIS.",confidence:"High",risk:true,risk_desc:"Full EIS adds 6-18+ months."},
-{id:"pp4",name:"Agency Referrals - Prelim",phase:"Preliminary Plat",category:"Town",min:20,avg:30,max:40,dependencies:["pp2"],responsible:"Multiple Departments",notes:"Per §4-6-2B. 30-day window.",confidence:"High",risk:false,risk_desc:""},
-{id:"pp5",name:"PB Hearing - Preliminary",phase:"Preliminary Plat",category:"Town",min:14,avg:30,max:60,dependencies:["pp3","pp4"],responsible:"Planning Board",notes:"Per §4-6-2C. 62-day clock.",confidence:"High",risk:true,risk_desc:"Contested hearings may span sessions."},
-{id:"pp6",name:"Preliminary Approval (6-Month)",phase:"Preliminary Plat",category:"Milestone",min:0,avg:0,max:0,dependencies:["pp5"],responsible:"Planning Board",notes:"Per §1-9-1. 6-month validity.",confidence:"High",risk:true,risk_desc:"Tight window."},
-{id:"inf0",name:"NYSDEC JD - 2025",phase:"Infrastructure Permitting",category:"State Agency",min:45,avg:120,max:210,dependencies:["pp6"],responsible:"NYSDEC Region 9",notes:"2025 expanded wetlands. Sequential JD required.",confidence:"Medium",risk:true,risk_desc:"Adds 90-180 days."},
-{id:"inf1",name:"NYSDEC Wetlands Permit",phase:"Infrastructure Permitting",category:"State Agency",min:120,avg:210,max:420,dependencies:["inf0"],responsible:"NYSDEC Region 9",notes:"Article 24. GP-0-25-003 for minor.",confidence:"Medium",risk:true,risk_desc:"Individual permit 90-365 days."},
-{id:"inf2",name:"Erie County Health Approval",phase:"Infrastructure Permitting",category:"County",min:45,avg:75,max:150,dependencies:["pp6"],responsible:"Erie County Health",notes:"Per §3-3-5A.",confidence:"High",risk:false,risk_desc:""},
-{id:"inf3",name:"Highway Access Permit",phase:"Infrastructure Permitting",category:"State/County",min:30,avg:60,max:120,dependencies:["pp6"],responsible:"NYSDOT / Erie DPW",notes:"Required for state/county road access.",confidence:"Medium",risk:true,risk_desc:"60-180 days."},
-{id:"inf4",name:"USACE Section 404",phase:"Infrastructure Permitting",category:"Federal",min:60,avg:120,max:365,dependencies:["pp6"],responsible:"USACE Buffalo",notes:"Nationwide or Individual permit.",confidence:"Medium",risk:true,risk_desc:"Individual 6-12+ months."},
-{id:"fp1",name:"Final Plat Preparation",phase:"Final Plat",category:"Applicant",min:45,avg:75,max:120,dependencies:["pp6","inf2"],responsible:"Applicant / PE",notes:"Per §4-6-3A. Within 6 months of prelim.",confidence:"High",risk:false,risk_desc:""},
-{id:"fp2",name:"Final Plat Staff Review",phase:"Final Plat",category:"Town",min:10,avg:21,max:30,dependencies:["fp1"],responsible:"Planning Director",notes:"Per §4-6-3B.",confidence:"High",risk:false,risk_desc:""},
-{id:"fp3",name:"PB Final Plat Approval",phase:"Final Plat",category:"Town",min:21,avg:35,max:62,dependencies:["fp2"],responsible:"Planning Board",notes:"Per §4-6-3. No hearing if substantial agreement.",confidence:"High",risk:true,risk_desc:"Hearing adds 15-45d if not in agreement."},
-{id:"fp4",name:"Town Attorney Review",phase:"Final Plat",category:"Town",min:7,avg:14,max:30,dependencies:["fp3"],responsible:"Town Attorney",notes:"Per §4-6-3K. Covenants before filing.",confidence:"High",risk:false,risk_desc:""},
-{id:"fp5",name:"County Clerk Filing",phase:"Final Plat",category:"Milestone",min:3,avg:7,max:14,dependencies:["fp4"],responsible:"Applicant",notes:"Per §4-6-3F. Within 62 days of signature.",confidence:"High",risk:false,risk_desc:""},
-{id:"cp1",name:"PIP Permit",phase:"Construction Permitting",category:"Town",min:14,avg:30,max:60,dependencies:["fp5"],responsible:"Town Board / Engineer",notes:"Per §5-3-1.",confidence:"High",risk:false,risk_desc:""},
-{id:"cp2",name:"Performance Bond",phase:"Construction Permitting",category:"Applicant",min:7,avg:21,max:45,dependencies:["fp5"],responsible:"Bonding Company",notes:"Per §5-2. Up to 125%, 3-year term.",confidence:"High",risk:false,risk_desc:""},
-{id:"cp3",name:"Building Permits",phase:"Construction Permitting",category:"Town",min:14,avg:21,max:45,dependencies:["cp1"],responsible:"Building Dept",notes:"Per §1-7-2.",confidence:"High",risk:false,risk_desc:""},
-{id:"con1",name:"Site Clearing & Grading",phase:"Construction",category:"Applicant",min:21,avg:45,max:75,dependencies:["cp1"],responsible:"General Contractor",notes:"SPDES GP. Erosion control.",confidence:"High",risk:false,risk_desc:""},
-{id:"con2",name:"Underground Utilities",phase:"Construction",category:"Applicant",min:45,avg:90,max:150,dependencies:["con1"],responsible:"Utility Contractors",notes:"Per §3-3-1. Sewer before street.",confidence:"High",risk:false,risk_desc:""},
-{id:"con3",name:"Road Construction",phase:"Construction",category:"Applicant",min:45,avg:75,max:135,dependencies:["con2"],responsible:"Contractor",notes:"Per §3-2-4. 28\' min pavement.",confidence:"High",risk:false,risk_desc:""},
-{id:"con4",name:"Sidewalks & Curbs",phase:"Construction",category:"Applicant",min:14,avg:30,max:60,dependencies:["con3"],responsible:"Contractor",notes:"Per §3-2-4H. ADA ramps required.",confidence:"High",risk:false,risk_desc:""},
-{id:"con5",name:"Trees & Monuments",phase:"Construction",category:"Applicant",min:7,avg:14,max:30,dependencies:["con4"],responsible:"Surveyor / Landscape",notes:"Per §3-2-4Q. 1 tree/40 LF. Per §3-6 monuments.",confidence:"High",risk:false,risk_desc:""},
-{id:"con6",name:"Vertical Construction",phase:"Construction",category:"Applicant",min:150,avg:240,max:420,dependencies:["con3","cp3"],responsible:"Builder",notes:"Per lot permits. April-Nov season.",confidence:"Medium",risk:true,risk_desc:"WNY winters (92\" snow)."},
-{id:"insp1",name:"Town Engineer Inspections",phase:"Inspections & Acceptance",category:"Town",min:0,avg:0,max:0,dependencies:["con1"],responsible:"Town Engineer",notes:"Per §5-4-2. Costs to petitioner.",confidence:"High",risk:false,risk_desc:""},
-{id:"insp2",name:"PE As-Built Certification",phase:"Inspections & Acceptance",category:"Applicant",min:14,avg:30,max:60,dependencies:["con5","con2"],responsible:"Registered PE",notes:"Per §5-4-1.",confidence:"High",risk:false,risk_desc:""},
-{id:"insp3",name:"Maintenance Bond (25%)",phase:"Inspections & Acceptance",category:"Applicant",min:7,avg:14,max:21,dependencies:["insp2"],responsible:"Bonding Company",notes:"Per §5-5. 2-year, 25%.",confidence:"High",risk:false,risk_desc:""},
-{id:"insp4",name:"Town Board Acceptance",phase:"Inspections & Acceptance",category:"Town",min:10,avg:21,max:45,dependencies:["insp3"],responsible:"Town Board",notes:"Per §4-6-3I(2). Streets private until accepted.",confidence:"High",risk:true,risk_desc:"Delayed if deficiencies."},
-{id:"insp5",name:"Certificate of Occupancy",phase:"Inspections & Acceptance",category:"Town",min:7,avg:14,max:30,dependencies:["con6","insp1"],responsible:"Building Dept",notes:"Per §1-7-2.",confidence:"High",risk:false,risk_desc:""}
-];
-// Town data: clarence
-const CT=[
-{id:"c1",name:"Site Feasibility & Due Diligence",phase:"Pre-Application",category:"Applicant",min:21,avg:35,max:60,dependencies:[],responsible:"Applicant / Engineer",notes:"Zoning per Ch. 229, Ch. 91 environmental review. Master Plan conformance check critical — TB gates concept referral.",confidence:"High",risk:false,risk_desc:""},
-{id:"c2",name:"Boundary & Topographic Survey",phase:"Pre-Application",category:"Applicant",min:14,avg:30,max:60,dependencies:["c1"],responsible:"NYS Licensed Surveyor",notes:"Per §193-13, sealed by licensed surveyor. Wetland delineation flagging, flood zone, conservation areas per Ch. 200 §200-46.",confidence:"High",risk:false,risk_desc:""},
-{id:"c3",name:"Pre-Application Conference",phase:"Pre-Application",category:"Town",min:7,avg:14,max:30,dependencies:["c1"],responsible:"Dir. Community Development",notes:"Per §193-13B. Review requirements, timetable, ODA eligibility (Article V). (716) 741-8930.",confidence:"High",risk:false,risk_desc:""},
-{id:"c4",name:"SEQR EAF Preparation",phase:"Pre-Application",category:"Applicant",min:7,avg:14,max:30,dependencies:["c3"],responsible:"Environmental Consultant",notes:"Per §193-13E. TB=lead agency for clustering; PB=lead otherwise. Ch. 91 Environmental Quality Review.",confidence:"High",risk:true,risk_desc:"Full EIS adds 6-18 months. Coordinated review between TB/PB adds complexity."},
-{id:"c5",name:"Concept Plan Preparation",phase:"Concept Plan",category:"Applicant",min:30,avg:60,max:120,dependencies:["c2","c3","c4"],responsible:"Applicant / PE",notes:"Per §193-15B(1). 9 copies + checklist + Ch. 99 fee. 2 weeks before TB meeting.",confidence:"High",risk:false,risk_desc:""},
-{id:"c6",name:"Town Board Introduction & Master Plan Review",phase:"Concept Plan",category:"Town",min:21,avg:30,max:60,dependencies:["c5"],responsible:"Town Board",notes:"Per §193-15B(2)(a-b). TB reviews Master Plan conformance. Refers to PB only if conforming.",confidence:"High",risk:true,risk_desc:"TB may not refer if not conforming to Master Plan. Project can die here."},
-{id:"c7",name:"PB SEQR & Environmental Review",phase:"Concept Plan",category:"Town",min:14,avg:30,max:60,dependencies:["c6"],responsible:"Planning Board",notes:"Per §193-15B(2)(d). Environmental, zoning, development pattern review. ODA provisions (Article V) evaluated.",confidence:"High",risk:true,risk_desc:"SEQR coordination between boards adds complexity."},
-{id:"c8",name:"Public Hearing — Concept Plan",phase:"Concept Plan",category:"Town",min:21,avg:35,max:55,dependencies:["c7"],responsible:"TB or PB",notes:"Per §193-15B(2)(f). Within 45 days. 5-day newspaper notice. 500-ft owner notice.",confidence:"High",risk:false,risk_desc:""},
-{id:"c9",name:"Concept Plan Approval",phase:"Concept Plan",category:"Milestone",min:0,avg:7,max:14,dependencies:["c8"],responsible:"TB or PB",notes:"Per §193-15B(2)(g). Within 62 days of introduction. Expires 2 years.",confidence:"High",risk:true,risk_desc:"Dual-board review adds time vs. single-board towns."},
-{id:"c10",name:"Development Plan Preparation",phase:"Preliminary Plat",category:"Applicant",min:60,avg:120,max:210,dependencies:["c9"],responsible:"Applicant / PE",notes:"Per §193-15C. Within 2 years of concept. Full engineering: drainage per §193-24, streets per §193-27, water per Ch. 223, sewer per Ch. 177.",confidence:"High",risk:false,risk_desc:""},
-{id:"c11",name:"Development Plan Submission",phase:"Preliminary Plat",category:"Town",min:5,avg:14,max:21,dependencies:["c10"],responsible:"PB / Dir. Community Dev.",notes:"Per §193-15D(1). Environmental review form. Distributed to all reviewing agencies.",confidence:"High",risk:false,risk_desc:""},
-{id:"c12",name:"Agency Referrals — Internal Departments",phase:"Agency Referrals",category:"Town",min:20,avg:30,max:45,dependencies:["c11"],responsible:"Engineer, Highway, Building",notes:"Per §193-13F. Town Engineer (drainage/water/sewer), Highway Supt (roads/signs), Building Dept (zoning compliance).",confidence:"High",risk:false,risk_desc:""},
-{id:"c12b",name:"Agency Referrals — Erie County (GML §239)",phase:"Agency Referrals",category:"County",min:20,avg:30,max:45,dependencies:["c11"],responsible:"Erie County DEDP",notes:"Per GML §239-n. County has 30 days. Required for parcels within 500 ft of county/state road, municipal boundary, or county-owned land.",confidence:"High",risk:false,risk_desc:""},
-{id:"c13",name:"Adequate Public Facilities Test",phase:"Agency Referrals",category:"Town",min:21,avg:45,max:90,dependencies:["c11"],responsible:"Multiple Departments",notes:"Per §193-17. UNIQUE TO CLARENCE. Evaluates: educational capacity, utility capacity, public service capacity. Special districts per §193-17B.",confidence:"High",risk:true,risk_desc:"Can block approval if infrastructure capacity is deficient. May require district formation."},
-{id:"c14",name:"PB Action on Development Plan (45d)",phase:"Preliminary Plat",category:"Town",min:14,avg:30,max:45,dependencies:["c12","c12b","c13"],responsible:"Planning Board",notes:"Per §193-15E(1). Within 45 days of completed plan + all agency approvals received.",confidence:"High",risk:false,risk_desc:""},
-{id:"c15",name:"Development Plan Approval (2-Year)",phase:"Preliminary Plat",category:"Milestone",min:0,avg:0,max:0,dependencies:["c14"],responsible:"Planning Board",notes:"Per §193-15F(2). 2-year expiration. Extension up to 2 additional years available.",confidence:"High",risk:false,risk_desc:""},
-{id:"c16",name:"NYSDEC Jurisdictional Determination",phase:"Infrastructure Permitting",category:"State Agency",min:30,avg:90,max:180,dependencies:["c15"],responsible:"NYSDEC Region 9",notes:"2025 expanded wetlands jurisdiction. Sequential JD required before permit application.",confidence:"Medium",risk:true,risk_desc:"Adds 90-180 days if wetlands present on site."},
-{id:"c17",name:"NYSDEC Wetlands Permit (Article 24)",phase:"Infrastructure Permitting",category:"State Agency",min:90,avg:180,max:365,dependencies:["c16"],responsible:"NYSDEC Region 9",notes:"Article 24 ECL. GP-0-25-003 for minor impacts (<0.1 acre). Individual permit for larger disturbance.",confidence:"Medium",risk:true,risk_desc:"Individual permit 90-365 days."},
-{id:"c17b",name:"USACE Section 404 Permit",phase:"Infrastructure Permitting",category:"Federal",min:60,avg:120,max:365,dependencies:["c15"],responsible:"USACE Buffalo District",notes:"Required for fill in waters of US/wetlands. Nationwide 29 for residential or Individual permit. Erie County exposure.",confidence:"Medium",risk:true,risk_desc:"Individual permit 6-12+ months."},
-{id:"c18",name:"Erie County Health Dept Approval",phase:"Infrastructure Permitting",category:"County",min:30,avg:60,max:120,dependencies:["c15"],responsible:"Erie County Health",notes:"Per §193-13F(2). Ch. 177 Sewers, Ch. 223 Water. Sanitary sewer extension and water supply approval.",confidence:"High",risk:false,risk_desc:""},
-{id:"c19",name:"Special District Formation (Water/Sewer/Lighting)",phase:"Infrastructure Permitting",category:"Town",min:45,avg:90,max:150,dependencies:["c15"],responsible:"Town Board",notes:"Per §193-17B. Ch. 99 fees. NYS Town Law Art. 12. Public hearing required for each district.",confidence:"High",risk:true,risk_desc:"TB hearing adds 60-120 days. Required before construction can begin."},
-{id:"c19b",name:"Highway Access Permit (State/County)",phase:"Infrastructure Permitting",category:"State/County",min:30,avg:60,max:120,dependencies:["c15"],responsible:"NYSDOT / Erie County DPW",notes:"Required for access onto state or county roads. Traffic impact study if warranted by trip generation.",confidence:"Medium",risk:true,risk_desc:"NYSDOT reviews 60-180 days."},
-{id:"c20",name:"Grading Permit (Ch. 79)",phase:"Infrastructure Permitting",category:"Town",min:7,avg:14,max:30,dependencies:["c15"],responsible:"Town Engineer",notes:"Per Ch. 79 Clearing and Grading. Required before any land disturbance. Separate from PIP.",confidence:"High",risk:false,risk_desc:""},
-{id:"c20b",name:"Public Improvement Permit (PIP)",phase:"Infrastructure Permitting",category:"Town",min:14,avg:30,max:60,dependencies:["c15"],responsible:"Town Engineer",notes:"Per §193-15H. Ch. 121 Public and Private Improvements. Performance bond required before issuance.",confidence:"High",risk:false,risk_desc:""},
-{id:"c20c",name:"Performance Bond",phase:"Infrastructure Permitting",category:"Applicant",min:7,avg:21,max:45,dependencies:["c15"],responsible:"Bonding Company",notes:"Per NYS Town Law §277. Bond = estimated cost of all improvements. 3-year term typical.",confidence:"High",risk:false,risk_desc:""},
-{id:"c21",name:"Final Plat Preparation",phase:"Final Plat",category:"Applicant",min:30,avg:60,max:90,dependencies:["c15","c18"],responsible:"Applicant / PE",notes:"Per §193-16A. Max 2 phases under construction simultaneously.",confidence:"High",risk:false,risk_desc:""},
-{id:"c22",name:"Final Plat Review",phase:"Final Plat",category:"Town",min:10,avg:21,max:30,dependencies:["c21"],responsible:"Director / Engineer / Atty",notes:"Per §193-16B(1). Distributed to all agencies for final sign-off.",confidence:"High",risk:false,risk_desc:""},
-{id:"c23",name:"Final Plat Approval (62-Day Clock)",phase:"Final Plat",category:"Town",min:14,avg:30,max:62,dependencies:["c22"],responsible:"TB or PB",notes:"Per §193-16B(3). 62-day statutory clock. Failure to act = deemed approval.",confidence:"High",risk:false,risk_desc:""},
-{id:"c24",name:"Conditional Compliance (180d Window)",phase:"Final Plat",category:"Applicant",min:14,avg:60,max:180,dependencies:["c23"],responsible:"Applicant",notes:"Per §193-16B(5). Two 90-day extensions possible for condition satisfaction.",confidence:"High",risk:true,risk_desc:"180-day window. Failure = plat lapses."},
-{id:"c25",name:"Erie County Clerk Filing",phase:"County Clerk Filing",category:"Milestone",min:3,avg:7,max:14,dependencies:["c24"],responsible:"Applicant",notes:"Per §193-14B(2)(d). Within 62 days of PB Chair signature. Filed with Erie County Clerk.",confidence:"High",risk:false,risk_desc:""},
-{id:"c26",name:"Site Clearing & Grading",phase:"Construction",category:"Applicant",min:14,avg:30,max:60,dependencies:["c20","c20b","c25"],responsible:"General Contractor",notes:"Ch. 79 Grading Permit. Ch. 131 Landscape Conservation — tree preservation plan. SPDES GP-0-24-001.",confidence:"High",risk:false,risk_desc:""},
-{id:"c26b",name:"Underground Utilities (Water & Sewer)",phase:"Construction",category:"Applicant",min:45,avg:90,max:150,dependencies:["c26"],responsible:"Utility Contractors",notes:"Ch. 223 Water, Ch. 177 Sewers per Erie County Health specs. Sewer installed before street base. Pressure/leak testing required.",confidence:"High",risk:false,risk_desc:""},
-{id:"c26c",name:"Drainage & Stormwater Construction",phase:"Construction",category:"Applicant",min:21,avg:45,max:90,dependencies:["c26"],responsible:"Utility Contractors",notes:"Per §193-24 Drainage. Storm sewer, detention/retention per Manual of Standards. Concurrent with underground utilities.",confidence:"High",risk:false,risk_desc:""},
-{id:"c27",name:"Road Construction (Base & Paving)",phase:"Construction",category:"Applicant",min:45,avg:75,max:135,dependencies:["c26b","c26c"],responsible:"Paving Contractor",notes:"Per §193-27 Streets. Subbase, base course, binder, wearing course per Manual of Standards.",confidence:"High",risk:false,risk_desc:""},
-{id:"c27b",name:"Sidewalks, Curbs & Monuments",phase:"Construction",category:"Applicant",min:14,avg:30,max:60,dependencies:["c27"],responsible:"Contractor / Surveyor",notes:"Per §193-27. ADA-compliant ramps required. Iron pin monuments per §193-13(3). Street name signs per Highway Supt.",confidence:"High",risk:false,risk_desc:""},
-{id:"c28",name:"Park & Pedestrian Improvements",phase:"Construction",category:"Applicant",min:14,avg:30,max:60,dependencies:["c27"],responsible:"Landscape Contractor",notes:"Per §193-30 Park dedication (or fee-in-lieu), §193-30.1 Pedestrian & educational facilities. Landscaping per Ch. 131.",confidence:"High",risk:false,risk_desc:""},
-{id:"c29",name:"Vertical Construction (Homes)",phase:"Construction",category:"Applicant",min:150,avg:240,max:420,dependencies:["c27","c20c"],responsible:"Builder",notes:"Per Ch. 67 Building Construction. No building permits until County Clerk filing complete. April-Nov season.",confidence:"Medium",risk:true,risk_desc:"WNY winters (92\" avg snow). Construction season April-November."},
-{id:"c30",name:"Town Engineer Inspections (Ongoing)",phase:"Inspections & Acceptance",category:"Town",min:0,avg:0,max:0,dependencies:["c26"],responsible:"Town Engineer",notes:"Per §193-15F(3). Ongoing during construction phases. Inspection costs borne by developer.",confidence:"High",risk:false,risk_desc:""},
-{id:"c30b",name:"PE As-Built Certification",phase:"Inspections & Acceptance",category:"Applicant",min:14,avg:30,max:60,dependencies:["c27b","c26b"],responsible:"Registered PE",notes:"Certified as-built plans for all infrastructure. Required before completion certificate issuance.",confidence:"High",risk:false,risk_desc:""},
-{id:"c30c",name:"Certificate of Subdivision Completion",phase:"Inspections & Acceptance",category:"Town",min:7,avg:14,max:30,dependencies:["c30b","c28"],responsible:"Town Engineer",notes:"Per §193-15F(3). Issued when all infrastructure meets Manual of Standards specifications.",confidence:"High",risk:false,risk_desc:""},
-{id:"c31",name:"Maintenance Bond & Road Acceptance",phase:"Inspections & Acceptance",category:"Town",min:10,avg:21,max:45,dependencies:["c30c"],responsible:"Town Board",notes:"Per §193-15G. Maintenance bond per NYS Town Law §277. TB resolution to accept roads/infrastructure.",confidence:"High",risk:true,risk_desc:"Roads remain private until TB acceptance. Deficiencies delay acceptance."},
-{id:"c32",name:"Certificate of Occupancy",phase:"Inspections & Acceptance",category:"Town",min:7,avg:14,max:30,dependencies:["c29","c30c"],responsible:"Building Dept",notes:"Per §193-16B(6)(a). Utilities & streets must be complete or bonded. Issued per-dwelling.",confidence:"High",risk:false,risk_desc:""}
-];
-// Town data: hamburg
-const HT=[
-{id:"h1",name:"Site Feasibility & Due Diligence",phase:"Pre-Application",category:"Applicant",min:14,avg:21,max:45,dependencies:[],responsible:"Applicant / Engineer",notes:"Zoning check — condominiums only in R-3. Flood zone, wetlands, soils assessment. Review fee schedule rev. 3/25/24.",confidence:"High",risk:false,risk_desc:""},
-{id:"h2",name:"Boundary & Topographic Survey",phase:"Pre-Application",category:"Applicant",min:14,avg:30,max:60,dependencies:["h1"],responsible:"NYS Licensed Surveyor",notes:"5 copies of topographic map required. NAVD 1988 datum. Include wetland flagging if applicable.",confidence:"High",risk:false,risk_desc:""},
-{id:"h3",name:"Planning Dept Pre-Application Meeting",phase:"Pre-Application",category:"Town",min:7,avg:14,max:21,dependencies:["h1"],responsible:"Joshua Rogers, Planning Dir.",notes:"716-649-2023. 6100 S. Park Ave. Determines Short vs Full EAF. Classifies Major/Minor.",confidence:"High",risk:false,risk_desc:""},
-{id:"h4",name:"SEQR EAF Preparation",phase:"Pre-Application",category:"Applicant",min:7,avg:14,max:30,dependencies:["h3"],responsible:"Environmental Consultant",notes:"Full Form EAF Part 1 required via DEC EAF Mapper. Part 2/3 completed by PB as lead agency.",confidence:"High",risk:true,risk_desc:"Full EIS can add 6-18 months if Positive Declaration."},
-{id:"h5",name:"Sketch Plan Preparation",phase:"Sketch Plan",category:"Applicant",min:21,avg:45,max:75,dependencies:["h2","h3","h4"],responsible:"Applicant / PE",notes:"Fee: Planning $750, Engineering $750 per fee schedule rev. 3/25/24. Lot layout, streets, drainage concept.",confidence:"High",risk:false,risk_desc:""},
-{id:"h6",name:"Sketch Plan Submission (2-Week Deadline)",phase:"Sketch Plan",category:"Applicant",min:1,avg:3,max:7,dependencies:["h5"],responsible:"Applicant",notes:"Must submit 2 weeks prior to PB meeting date. Miss deadline = wait another month.",confidence:"High",risk:true,risk_desc:"Strict 2-week pre-meeting deadline. Monthly PB schedule."},
-{id:"h7",name:"Sketch Plan PB Review",phase:"Sketch Plan",category:"Town",min:14,avg:30,max:45,dependencies:["h6"],responsible:"Planning Board",notes:"PB reviews for conformance with zoning, access, drainage concept, lot layout.",confidence:"High",risk:false,risk_desc:""},
-{id:"h8",name:"Preliminary Plan Preparation",phase:"Preliminary Plat",category:"Applicant",min:60,avg:105,max:180,dependencies:["h7"],responsible:"Applicant / PE",notes:"Scale ≤1 inch=100 ft. Show all items per submittal checklist. Full engineering design for drainage, roads, utilities.",confidence:"High",risk:false,risk_desc:""},
-{id:"h9",name:"Preliminary Plan Submission (2-Week Deadline)",phase:"Preliminary Plat",category:"Applicant",min:1,avg:3,max:7,dependencies:["h8"],responsible:"Applicant",notes:"2 weeks prior to PB meeting. Electronic FEAF Part 1 + Info Sheet + 5 copies.",confidence:"High",risk:true,risk_desc:"Miss 2-week deadline = wait another month for next PB."},
-{id:"h10",name:"SEQR Full EAF Review & Determination",phase:"SEQR Review",category:"Town",min:21,avg:45,max:75,dependencies:["h9"],responsible:"Planning Board",notes:"Full Form EAF Part 1 via DEC EAF Mapper. PB completes Parts 2 & 3. Neg Dec or Pos Dec.",confidence:"High",risk:true,risk_desc:"Positive Declaration triggers full EIS (6-18+ months)."},
-{id:"h11",name:"Agency Referrals — Internal",phase:"Agency Referrals",category:"Town",min:14,avg:21,max:30,dependencies:["h9"],responsible:"Planning Department",notes:"Highway Dept, Engineering Dept, Building Dept, Fire District referrals.",confidence:"High",risk:false,risk_desc:""},
-{id:"h11b",name:"Agency Referrals — Erie County (GML §239)",phase:"Agency Referrals",category:"County",min:20,avg:30,max:45,dependencies:["h9"],responsible:"Erie County DEDP",notes:"Per GML §239-n. 30-day review. Required for state/county road adjacency or municipal boundary proximity.",confidence:"High",risk:false,risk_desc:""},
-{id:"h11c",name:"SWPPP Review & Approval",phase:"Agency Referrals",category:"Town",min:21,avg:45,max:75,dependencies:["h9"],responsible:"Town Engineer / Stormwater Mgr",notes:"Stormwater Pollution Prevention Plan. Fee varies by disturbed acreage per fee schedule 3/25/24. Required for >1 acre disturbance.",confidence:"High",risk:false,risk_desc:""},
-{id:"h12",name:"Public Hearing",phase:"Public Hearing",category:"Town",min:14,avg:30,max:45,dependencies:["h10","h11","h11b"],responsible:"Planning Board",notes:"Fee: $375 (Major with PIP). 5-day newspaper notice. 10-day mailed notice.",confidence:"High",risk:false,risk_desc:""},
-{id:"h13",name:"Preliminary Plat Approval",phase:"Preliminary Plat",category:"Milestone",min:0,avg:7,max:14,dependencies:["h12"],responsible:"Planning Board",notes:"Conditions of approval attached. 6-month validity for final plat submission.",confidence:"High",risk:false,risk_desc:""},
-{id:"h14",name:"NYSDEC Jurisdictional Determination",phase:"Infrastructure Permitting",category:"State Agency",min:30,avg:90,max:180,dependencies:["h13"],responsible:"NYSDEC Region 9",notes:"2025 expanded wetlands jurisdiction. Required if any wetlands or watercourses on/adjacent to site.",confidence:"Medium",risk:true,risk_desc:"Adds 90-180 days if wetlands present."},
-{id:"h14b",name:"NYSDEC Wetlands Permit (Article 24)",phase:"Infrastructure Permitting",category:"State Agency",min:90,avg:180,max:365,dependencies:["h14"],responsible:"NYSDEC Region 9",notes:"Article 24 ECL. Required for disturbance within 100-ft adjacent area of mapped wetland.",confidence:"Medium",risk:true,risk_desc:"Individual permit 90-365 days."},
-{id:"h14c",name:"USACE Section 404 Permit",phase:"Infrastructure Permitting",category:"Federal",min:60,avg:120,max:365,dependencies:["h13"],responsible:"USACE Buffalo District",notes:"Required for fill in waters of US/wetlands. Nationwide 29 for residential. Erie County has significant wetland exposure.",confidence:"Medium",risk:true,risk_desc:"Individual permit 6-12+ months if Nationwide doesn't apply."},
-{id:"h14d",name:"Erie County Health Dept Approval",phase:"Infrastructure Permitting",category:"County",min:30,avg:60,max:120,dependencies:["h13"],responsible:"Erie County Health",notes:"Sanitary sewer extension and water supply plan approval. Required for all major subdivisions.",confidence:"High",risk:false,risk_desc:""},
-{id:"h14e",name:"Highway Access Permit (State/County)",phase:"Infrastructure Permitting",category:"State/County",min:30,avg:60,max:120,dependencies:["h13"],responsible:"NYSDOT / Erie County DPW",notes:"Required for access onto state or county roads. Traffic impact study if warranted.",confidence:"Medium",risk:true,risk_desc:"NYSDOT reviews 60-180 days."},
-{id:"h15",name:"Final Plat Preparation",phase:"Final Plat",category:"Applicant",min:45,avg:60,max:105,dependencies:["h13"],responsible:"Applicant / PE",notes:"Fee: Map Cover $2,000. Incorporate all hearing conditions. Within 6 months of preliminary approval.",confidence:"High",risk:false,risk_desc:""},
-{id:"h16",name:"Final Plat PB Review & Approval",phase:"Final Plat",category:"Town",min:14,avg:30,max:62,dependencies:["h15"],responsible:"Planning Board",notes:"62-day statutory clock per NYS Town Law §276. Filed with Erie County Clerk upon approval.",confidence:"High",risk:false,risk_desc:""},
-{id:"h16b",name:"Erie County Clerk Filing",phase:"Final Plat",category:"Milestone",min:3,avg:7,max:14,dependencies:["h16"],responsible:"Applicant",notes:"Within 62 days of PB Chair signature. Plat void if not timely filed.",confidence:"High",risk:false,risk_desc:""},
-{id:"h17",name:"PIP Permit & Construction Drawings",phase:"Construction Permitting",category:"Town",min:14,avg:30,max:60,dependencies:["h16b"],responsible:"Town Engineer",notes:"Fee: $65/lot up to 20, $45/lot over 20. Approved construction drawings required.",confidence:"High",risk:false,risk_desc:""},
-{id:"h17b",name:"Performance Bond",phase:"Construction Permitting",category:"Applicant",min:7,avg:21,max:45,dependencies:["h16b"],responsible:"Bonding Company",notes:"Per NYS Town Law §277. Bond = estimated cost of all public improvements.",confidence:"High",risk:false,risk_desc:""},
-{id:"h17c",name:"Building Permits",phase:"Construction Permitting",category:"Town",min:7,avg:14,max:30,dependencies:["h17"],responsible:"Building Dept",notes:"Individual lot permits. After PIP and County Clerk filing complete.",confidence:"High",risk:false,risk_desc:""},
-{id:"h18",name:"Site Clearing & Erosion Control",phase:"Construction",category:"Applicant",min:14,avg:30,max:60,dependencies:["h17"],responsible:"General Contractor",notes:"SPDES GP-0-24-001 compliance. Silt fence, inlet protection, stabilized construction entrance.",confidence:"High",risk:false,risk_desc:""},
-{id:"h18b",name:"Underground Utilities (Water & Sewer)",phase:"Construction",category:"Applicant",min:45,avg:90,max:150,dependencies:["h18"],responsible:"Utility Contractors",notes:"Per Erie County Health specs. Sewer installed before road base. Pressure testing, TV inspection required.",confidence:"High",risk:false,risk_desc:""},
-{id:"h18c",name:"Drainage & Stormwater Construction",phase:"Construction",category:"Applicant",min:21,avg:45,max:90,dependencies:["h18"],responsible:"Utility Contractors",notes:"Storm sewer, detention/retention basins per SWPPP. Concurrent with underground utilities.",confidence:"High",risk:false,risk_desc:""},
-{id:"h18d",name:"Road Construction (Base & Paving)",phase:"Construction",category:"Applicant",min:45,avg:75,max:135,dependencies:["h18b","h18c"],responsible:"Paving Contractor",notes:"Subbase, base course, binder, wearing course per Town specs. April-Nov paving season.",confidence:"High",risk:false,risk_desc:""},
-{id:"h18e",name:"Sidewalks, Curbs & Landscaping",phase:"Construction",category:"Applicant",min:14,avg:30,max:60,dependencies:["h18d"],responsible:"Contractor / Landscaper",notes:"ADA-compliant curb ramps. Street trees per Town standards. Monuments set by surveyor.",confidence:"High",risk:false,risk_desc:""},
-{id:"h19",name:"Vertical Construction (Homes)",phase:"Construction",category:"Applicant",min:150,avg:240,max:420,dependencies:["h18d","h17c"],responsible:"Builder",notes:"Per individual lot building permits. WNY climate: April-November primary season.",confidence:"Medium",risk:true,risk_desc:"WNY winters (92\" avg snow). November frost deadline."},
-{id:"h20",name:"Town Engineer Inspections (Ongoing)",phase:"Inspections & Acceptance",category:"Town",min:0,avg:0,max:0,dependencies:["h18"],responsible:"Town Engineer",notes:"Ongoing during all construction phases. Inspection costs borne by developer per fee schedule.",confidence:"High",risk:false,risk_desc:""},
-{id:"h20b",name:"PE As-Built Certification",phase:"Inspections & Acceptance",category:"Applicant",min:14,avg:30,max:60,dependencies:["h18e","h18b"],responsible:"Registered PE",notes:"Certified as-built plans for all infrastructure. Required before bond release.",confidence:"High",risk:false,risk_desc:""},
-{id:"h21",name:"Maintenance Bond & Town Board Acceptance",phase:"Inspections & Acceptance",category:"Town",min:10,avg:21,max:45,dependencies:["h20b"],responsible:"Town Board",notes:"Maintenance bond replaces performance bond. Streets accepted by TB resolution. 2-year maintenance period typical.",confidence:"High",risk:true,risk_desc:"Roads private until TB acceptance. Deficiencies delay acceptance."},
-{id:"h22",name:"Certificate of Occupancy",phase:"Inspections & Acceptance",category:"Town",min:7,avg:14,max:30,dependencies:["h19","h20b"],responsible:"Building Dept",notes:"Per dwelling unit. Requires infrastructure complete or bonded, all inspections passed.",confidence:"High",risk:false,risk_desc:""}
-];
-// Town data: lancaster
-const LT=[
-{id:"l1",name:"Site Feasibility & Due Diligence",phase:"Pre-Application",category:"Applicant",min:21,avg:35,max:60,dependencies:[],responsible:"Applicant / Engineer",notes:"Per §400-38. Check overlay districts §§400-24 to 400-27. No flag lots permitted (§400-38D(3)). Zoning per Ch. 400.",confidence:"High",risk:false,risk_desc:""},
-{id:"l2",name:"Boundary & Topographic Survey",phase:"Pre-Application",category:"Applicant",min:14,avg:30,max:60,dependencies:["l1"],responsible:"NYS Licensed Surveyor",notes:"Required for all submissions. Include wetland delineation, flood zone, existing structures, trees.",confidence:"High",risk:false,risk_desc:""},
-{id:"l3",name:"SEQR EAF Preparation",phase:"Pre-Application",category:"Applicant",min:7,avg:14,max:30,dependencies:["l1"],responsible:"Environmental Consultant",notes:"Per §400-38H(5)(f). EAF prepared concurrent with survey. PB is lead agency for SEQR.",confidence:"High",risk:true,risk_desc:"Full EIS can add 6-18 months."},
-{id:"l4",name:"Sketch Plan Submission (10d Prior to PB)",phase:"Sketch Plan",category:"Applicant",min:7,avg:14,max:30,dependencies:["l1","l2"],responsible:"Applicant",notes:"Per §400-38H(2). 3 copies to Town Clerk 10 days before PB meeting.",confidence:"High",risk:false,risk_desc:""},
-{id:"l5",name:"PB Classification (Minor vs Major)",phase:"Sketch Plan",category:"Town",min:1,avg:7,max:14,dependencies:["l4"],responsible:"Planning Board",notes:"Per §400-38H(3)(b). Minor = 4 lots or fewer, no new road. Major = 5+ lots or new road. PB discusses improvements.",confidence:"High",risk:false,risk_desc:""},
-{id:"l5b",name:"No Flag Lots Design Constraint",phase:"Sketch Plan",category:"Milestone",min:0,avg:0,max:0,dependencies:["l5"],responsible:"Applicant / PE",notes:"Per §400-38D(3). Flag lots explicitly prohibited. Each lot must have direct street frontage. Design constraint that affects lot layout.",confidence:"High",risk:false,risk_desc:""},
-{id:"l6",name:"Preliminary Plat Preparation",phase:"Preliminary Plat",category:"Applicant",min:60,avg:105,max:180,dependencies:["l5","l5b"],responsible:"Applicant / PE",notes:"Per §400-38H(5)(a). 6 copies to Town Clerk 10 days before TB meeting. Full engineering: drainage, roads, utilities per Ch. 206.",confidence:"High",risk:false,risk_desc:""},
-{id:"l7",name:"Submission to Town Clerk",phase:"Preliminary Plat",category:"Applicant",min:1,avg:3,max:10,dependencies:["l6"],responsible:"Applicant",notes:"Per §400-38H(5)(a). 2 copies referred to PB. Clerk distributes to all reviewing departments.",confidence:"High",risk:false,risk_desc:""},
-{id:"l8",name:"PB Review & Modifications (45-Day Clock)",phase:"Planning Board Review",category:"Town",min:30,avg:40,max:50,dependencies:["l7"],responsible:"Planning Board",notes:"Per §400-38H(5)(d). PB notifies applicant of required changes within 45 days. Amended 12-19-2022 per L.L. No. 10-2022.",confidence:"High",risk:false,risk_desc:""},
-{id:"l8b",name:"Agency Referrals — Internal Departments",phase:"Planning Board Review",category:"Town",min:14,avg:21,max:30,dependencies:["l7"],responsible:"Code Enforcement / Engineer",notes:"Town Engineer, Code Enforcement, Highway Dept, Fire District. Concurrent with PB review.",confidence:"High",risk:false,risk_desc:""},
-{id:"l8c",name:"Agency Referrals — Erie County (GML §239)",phase:"Planning Board Review",category:"County",min:20,avg:30,max:45,dependencies:["l7"],responsible:"Erie County DEDP",notes:"Per GML §239-n. 30-day review. Required for county/state road adjacency or municipal boundary.",confidence:"High",risk:false,risk_desc:""},
-{id:"l9",name:"PB SEQR Determination & Public Hearing (62-Day Clock)",phase:"Planning Board Review",category:"Town",min:35,avg:50,max:65,dependencies:["l8","l8b","l8c"],responsible:"Planning Board",notes:"Per §400-38H(5)(f). Hold hearing + SEQR within 62 days of complete application. Resubmission triggers full restart.",confidence:"High",risk:true,risk_desc:"Resubmission of revised plat restarts entire 62-day clock."},
-{id:"l10",name:"PB Recommendation to Town Board",phase:"Planning Board Review",category:"Milestone",min:1,avg:7,max:14,dependencies:["l9"],responsible:"Planning Board",notes:"Per §400-38E(1). PB sends written recommendation within 45 days of PB action. TB waits for PB report.",confidence:"High",risk:false,risk_desc:""},
-{id:"l11",name:"Town Board Decision on Preliminary",phase:"Town Board Review",category:"Town",min:30,avg:60,max:120,dependencies:["l10"],responsible:"Town Board",notes:"Per §400-38H(5)(g). TB acts after PB rec, or after 90 days. TB has SOLE FINAL AUTHORITY. Separate 45/90-day TB clock.",confidence:"High",risk:true,risk_desc:"Separate TB clock. TB can override PB recommendation."},
-{id:"l12",name:"NYSDEC Jurisdictional Determination",phase:"Infrastructure Permitting",category:"State Agency",min:30,avg:90,max:180,dependencies:["l11"],responsible:"NYSDEC Region 9",notes:"2025 expanded wetlands jurisdiction. Required if any wetlands/watercourses on or adjacent to site.",confidence:"Medium",risk:true,risk_desc:"Adds 90-180 days if wetlands present."},
-{id:"l12b",name:"NYSDEC Wetlands Permit (Article 24)",phase:"Infrastructure Permitting",category:"State Agency",min:90,avg:180,max:365,dependencies:["l12"],responsible:"NYSDEC Region 9",notes:"Article 24 ECL. Required for disturbance within mapped wetland or 100-ft adjacent area.",confidence:"Medium",risk:true,risk_desc:"Individual permit 90-365 days."},
-{id:"l12c",name:"USACE Section 404 Permit",phase:"Infrastructure Permitting",category:"Federal",min:60,avg:120,max:365,dependencies:["l11"],responsible:"USACE Buffalo District",notes:"Required for fill in waters of US/wetlands. Nationwide 29 or Individual permit.",confidence:"Medium",risk:true,risk_desc:"Individual permit 6-12+ months."},
-{id:"l13",name:"Erie County Health Dept Approval",phase:"Infrastructure Permitting",category:"County",min:30,avg:60,max:120,dependencies:["l11"],responsible:"Erie County Health",notes:"Sewer extension and water supply plan approval. Required for all major subdivisions.",confidence:"High",risk:false,risk_desc:""},
-{id:"l13b",name:"NYSDOT / Erie County Highway Access Permit",phase:"Infrastructure Permitting",category:"State/County",min:30,avg:60,max:120,dependencies:["l11"],responsible:"NYSDOT / Erie County DPW",notes:"Required for access onto state or county roads. Separate application from PB review. Traffic study if warranted.",confidence:"Medium",risk:true,risk_desc:"NYSDOT reviews 60-180 days. Separate from Town process."},
-{id:"l14",name:"Final Plat Preparation (6-Month Window)",phase:"Final Plat",category:"Applicant",min:45,avg:75,max:150,dependencies:["l11"],responsible:"Applicant / PE",notes:"Per §400-38H(6)(a). Within 6 months of preliminary approval. Otherwise treated as revised plat (full restart).",confidence:"High",risk:true,risk_desc:"6-month window. Late submission = treated as new application."},
-{id:"l15",name:"TB Public Hearing on Final Plat (45d)",phase:"Final Plat",category:"Town",min:14,avg:30,max:45,dependencies:["l14"],responsible:"Town Board",notes:"Per §400-38H(6)(d). Within 45 days. 5-day newspaper notice.",confidence:"High",risk:false,risk_desc:""},
-{id:"l16",name:"TB Action on Final Plat (45d Post-Hearing)",phase:"Final Plat",category:"Town",min:14,avg:30,max:45,dependencies:["l15"],responsible:"Town Board",notes:"Per §400-38H(6)(e). Within 45 days after hearing close. Failure to act = deemed approval.",confidence:"High",risk:false,risk_desc:""},
-{id:"l17",name:"Erie County Clerk Filing",phase:"Final Plat",category:"Milestone",min:3,avg:7,max:14,dependencies:["l16"],responsible:"Applicant",notes:"Filed with Erie County Clerk. Within 62 days of TB Chair signature.",confidence:"High",risk:false,risk_desc:""},
-{id:"l18",name:"PIP Permit & Construction Drawings",phase:"Construction Permitting",category:"Town",min:14,avg:30,max:60,dependencies:["l17"],responsible:"Town Engineer",notes:"Per §400-38G(3). Ch. 206 Public Improvements specifications. Notify Town 5 days before start.",confidence:"High",risk:false,risk_desc:""},
-{id:"l18b",name:"Performance Bond",phase:"Construction Permitting",category:"Applicant",min:7,avg:21,max:45,dependencies:["l17"],responsible:"Bonding Company",notes:"Per NYS Town Law §277. Bond = estimated cost of all improvements.",confidence:"High",risk:false,risk_desc:""},
-{id:"l18c",name:"Building Permits",phase:"Construction Permitting",category:"Town",min:7,avg:14,max:30,dependencies:["l18"],responsible:"Code Enforcement",notes:"Individual lot permits. After PIP and County Clerk filing.",confidence:"High",risk:false,risk_desc:""},
-{id:"l19",name:"Site Clearing & Erosion Control",phase:"Construction",category:"Applicant",min:14,avg:30,max:60,dependencies:["l18"],responsible:"General Contractor",notes:"SPDES GP-0-24-001. Erosion/sediment control per SWPPP. PE supervision per §400-38G(4)(a).",confidence:"High",risk:false,risk_desc:""},
-{id:"l19b",name:"Underground Utilities (Water & Sewer)",phase:"Construction",category:"Applicant",min:45,avg:90,max:150,dependencies:["l19"],responsible:"Utility Contractors",notes:"Per Ch. 206 Lancaster General Specifications. Sewer before road base. Pressure/leak testing.",confidence:"High",risk:false,risk_desc:""},
-{id:"l19c",name:"Drainage & Stormwater Construction",phase:"Construction",category:"Applicant",min:21,avg:45,max:90,dependencies:["l19"],responsible:"Utility Contractors",notes:"Storm sewer, detention/retention per approved SWPPP and Ch. 206 specs.",confidence:"High",risk:false,risk_desc:""},
-{id:"l19d",name:"Road Construction (Base & Paving)",phase:"Construction",category:"Applicant",min:30,avg:60,max:120,dependencies:["l19b","l19c"],responsible:"Paving Contractor",notes:"Per Ch. 206 specifications. Subbase, base, binder, top course. PE supervision per §400-38G(4)(a).",confidence:"High",risk:false,risk_desc:""},
-{id:"l19e",name:"Sidewalks, Curbs & Monuments",phase:"Construction",category:"Applicant",min:14,avg:30,max:60,dependencies:["l19d"],responsible:"Contractor / Surveyor",notes:"ADA curb ramps. Iron monuments per survey. Street name signs.",confidence:"High",risk:false,risk_desc:""},
-{id:"l20",name:"Vertical Construction (Homes)",phase:"Construction",category:"Applicant",min:150,avg:240,max:420,dependencies:["l19d","l18c"],responsible:"Builder",notes:"April-November primary season. No flag lots = all lots have street frontage.",confidence:"Medium",risk:true,risk_desc:"WNY winters (92\" avg snow). Construction season April-November."},
-{id:"l21",name:"Town Engineer Inspections (Ongoing)",phase:"Inspections & Acceptance",category:"Town",min:0,avg:0,max:0,dependencies:["l19"],responsible:"Town Engineer",notes:"Per §400-38G(4). Ongoing PE supervision required. Electronic + paper certified plans.",confidence:"High",risk:false,risk_desc:""},
-{id:"l21b",name:"PE As-Built Certification",phase:"Inspections & Acceptance",category:"Applicant",min:14,avg:30,max:60,dependencies:["l19e","l19b"],responsible:"Registered PE",notes:"Per §400-38G(4)(a). Certified as-built plans for all infrastructure.",confidence:"High",risk:false,risk_desc:""},
-{id:"l22",name:"Maintenance Bond (40%) & Town Board Acceptance",phase:"Inspections & Acceptance",category:"Town",min:14,avg:30,max:60,dependencies:["l21b"],responsible:"Town Board / Engineer",notes:"Per §400-38G(4)(f). 2-year maintenance period. 40% bond per Ch. 206 — higher than typical 25%.",confidence:"High",risk:true,risk_desc:"40% maintenance bond is higher than typical 25%. Deficiencies delay acceptance."},
-{id:"l23",name:"Certificate of Occupancy",phase:"Inspections & Acceptance",category:"Town",min:7,avg:14,max:30,dependencies:["l20","l21b"],responsible:"Code Enforcement",notes:"Per dwelling. Requires infrastructure complete or bonded, all inspections passed.",confidence:"High",risk:false,risk_desc:""}
-];
-// Town data: orchardpark
-const OT=[
-{id:"o1",name:"Site Feasibility & Due Diligence",phase:"Pre-Application",category:"Applicant",min:14,avg:21,max:45,dependencies:[],responsible:"Applicant / Engineer",notes:"Per §121-4. Erie County Health consultation advised early. Check Conservation Board overlay areas.",confidence:"High",risk:false,risk_desc:""},
-{id:"o2",name:"Boundary & Topographic Survey",phase:"Pre-Application",category:"Applicant",min:14,avg:30,max:60,dependencies:["o1"],responsible:"NYS Licensed Surveyor",notes:"Contours, existing improvements, wetland delineation, floodplain, tree survey.",confidence:"High",risk:false,risk_desc:""},
-{id:"o3",name:"SEQR EAF Preparation",phase:"Pre-Application",category:"Applicant",min:7,avg:14,max:30,dependencies:["o1"],responsible:"Environmental Consultant",notes:"EAF prepared concurrent with survey. PB is lead agency for SEQR in Orchard Park.",confidence:"High",risk:true,risk_desc:"Full EIS can add 6-18 months if Positive Declaration."},
-{id:"o4",name:"Pre-Application Sketch Plan Presentation",phase:"Sketch Plan",category:"Applicant",min:14,avg:21,max:45,dependencies:["o1","o2"],responsible:"Applicant / Engineer",notes:"Per §121-5. Sketch form: total area, zoning, phasing, title, wetlands, topo, aerial photo.",confidence:"High",risk:false,risk_desc:""},
-{id:"o5",name:"PB Recommendations & Dev Forms Issued",phase:"Sketch Plan",category:"Town",min:7,avg:14,max:30,dependencies:["o4"],responsible:"Planning Board",notes:"Per §121-6. Written recommendations on zoning, access, recreation, drainage. Development Forms package provided to applicant.",confidence:"High",risk:false,risk_desc:""},
-{id:"o5b",name:"Conservation Board Review",phase:"Sketch Plan",category:"Town",min:14,avg:21,max:45,dependencies:["o4"],responsible:"Conservation Board",notes:"Advisory review of environmental features, tree preservation, open space, wetland buffers. May recommend conditions.",confidence:"High",risk:false,risk_desc:""},
-{id:"o6",name:"Preliminary Plat Preparation",phase:"Preliminary Plat",category:"Applicant",min:45,avg:90,max:150,dependencies:["o5","o5b"],responsible:"Applicant / PE",notes:"Per §121-7. 8 sets required. Cover sheet signed by Highway Supt & Town Engineer. Full engineering.",confidence:"High",risk:false,risk_desc:""},
-{id:"o7",name:"Preliminary Plat Submission & Distribution",phase:"Preliminary Plat",category:"Town",min:5,avg:10,max:14,dependencies:["o6"],responsible:"PB Clerk",notes:"Per §121-8. Distributed to: Building Dept, PB (3 copies), Engineering (2), Highway Dept, Conservation Board.",confidence:"High",risk:false,risk_desc:""},
-{id:"o7b",name:"Agency Referrals — Erie County (GML §239)",phase:"Preliminary Plat",category:"County",min:20,avg:30,max:45,dependencies:["o7"],responsible:"Erie County DEDP",notes:"Per GML §239-n. 30-day county review. Required for state/county road adjacency.",confidence:"High",risk:false,risk_desc:""},
-{id:"o8",name:"Public Hearing (62-Day Clock #1)",phase:"Public Hearing",category:"Town",min:21,avg:40,max:62,dependencies:["o7","o7b"],responsible:"Planning Board",notes:"Per §121-9. FIRST 62-day clock: hearing within 62 days of receipt. 5-day newspaper notice.",confidence:"High",risk:true,risk_desc:"First of three separate 62-day statutory clocks."},
-{id:"o9",name:"PB Action Post-Hearing (62-Day Clock #2)",phase:"Preliminary Plat",category:"Town",min:21,avg:40,max:62,dependencies:["o8"],responsible:"Planning Board",notes:"Per §121-10. SECOND 62-day clock: PB acts within 62 days after close of hearing. Failure to act = deemed approval.",confidence:"High",risk:true,risk_desc:"Second 62-day clock. Tight statutory deadline."},
-{id:"o10",name:"Preliminary Conditional Approval",phase:"Preliminary Plat",category:"Milestone",min:0,avg:7,max:14,dependencies:["o9"],responsible:"PB Chairman",notes:"Per §121-11. Chairman signs approved plat + all development forms.",confidence:"High",risk:false,risk_desc:""},
-{id:"o11",name:"Petition TB for Districts (Rezoning/Sewer/Water)",phase:"Town Board Review",category:"Applicant",min:30,avg:60,max:120,dependencies:["o10"],responsible:"Applicant",notes:"Per §121-12. Petition for rezoning, sewer district, storm district, water district as needed. Each requires separate TB hearing.",confidence:"High",risk:true,risk_desc:"District creation requires TB hearing. Multiple districts = multiple hearings."},
-{id:"o12",name:"NYSDEC Jurisdictional Determination",phase:"Infrastructure Permitting",category:"State Agency",min:30,avg:90,max:180,dependencies:["o10"],responsible:"NYSDEC Region 9",notes:"2025 expanded wetlands jurisdiction. Required if any wetlands/watercourses on or adjacent to site.",confidence:"Medium",risk:true,risk_desc:"Adds 90-180 days if wetlands present."},
-{id:"o12b",name:"NYSDEC Wetlands Permit (Article 24)",phase:"Infrastructure Permitting",category:"State Agency",min:90,avg:180,max:365,dependencies:["o12"],responsible:"NYSDEC Region 9",notes:"Article 24 ECL. Required for disturbance within mapped wetland or 100-ft adjacent area.",confidence:"Medium",risk:true,risk_desc:"Individual permit 90-365 days."},
-{id:"o12c",name:"USACE Section 404 Permit",phase:"Infrastructure Permitting",category:"Federal",min:60,avg:120,max:365,dependencies:["o10"],responsible:"USACE Buffalo District",notes:"Required for fill in waters of US/wetlands. Nationwide 29 or Individual permit.",confidence:"Medium",risk:true,risk_desc:"Individual permit 6-12+ months."},
-{id:"o13",name:"Erie County Health Dept Approval",phase:"Infrastructure Permitting",category:"County",min:30,avg:60,max:120,dependencies:["o10"],responsible:"Erie County Health",notes:"Per §121-4. Required for 5+ lot subdivisions. Sanitary sewer and water supply approval.",confidence:"High",risk:false,risk_desc:""},
-{id:"o13b",name:"Ch. 144 Stormwater Management Plan",phase:"Infrastructure Permitting",category:"Town",min:14,avg:30,max:60,dependencies:["o10"],responsible:"Town Engineer / Stormwater Mgr",notes:"Per Ch. 144 Stormwater Management. SWPPP required for >1 acre disturbance. Separate from subdivision approval.",confidence:"High",risk:false,risk_desc:""},
-{id:"o14",name:"Final Plat Preparation (6-Month Window)",phase:"Final Plat",category:"Applicant",min:30,avg:60,max:180,dependencies:["o10","o11"],responsible:"Applicant / PE",notes:"Per §121-13. Form 3 + 3 linens + metes/bounds + fee. PB may refuse if >6 months from preliminary.",confidence:"High",risk:true,risk_desc:"6-month window from preliminary approval. Late = PB can refuse."},
-{id:"o15",name:"Obtain Dev Form 3 Approvals (All Agencies)",phase:"Final Plat",category:"Applicant",min:30,avg:45,max:90,dependencies:["o14"],responsible:"Applicant",notes:"Per §121-14. ALL Form 3 agency approvals must be obtained before PB submission. Highway Supt, Town Engineer, Health Dept, Conservation Board, Building Inspector each sign individually.",confidence:"High",risk:true,risk_desc:"Multiple agency sign-offs required. Any single holdout delays submission."},
-{id:"o16",name:"Final Plat PB Hearing",phase:"Final Plat",category:"Town",min:14,avg:21,max:45,dependencies:["o15"],responsible:"Planning Board",notes:"Per §121-15. Compare final with approved preliminary. Verify all conditions met.",confidence:"High",risk:false,risk_desc:""},
-{id:"o17",name:"TB Review of Final Plat",phase:"Town Board Review",category:"Town",min:7,avg:14,max:30,dependencies:["o16"],responsible:"Town Board",notes:"Per §121-16. TB may make recommendations to PB. Advisory role at final stage.",confidence:"High",risk:false,risk_desc:""},
-{id:"o18",name:"Final Plat Approval (62-Day Clock #3)",phase:"Final Plat",category:"Town",min:21,avg:40,max:62,dependencies:["o16","o17"],responsible:"Planning Board",notes:"Per §121-17. THIRD 62-day clock: within 62 days after final hearing. Three overlapping 62-day clocks = aggressive timeline.",confidence:"High",risk:true,risk_desc:"Third of three 62-day clocks. Failure to act = deemed approval."},
-{id:"o19",name:"TB Representative Signing & County Clerk Filing",phase:"Final Plat",category:"Milestone",min:5,avg:10,max:21,dependencies:["o18"],responsible:"TB Representative / Applicant",notes:"Per §121-18/19. TB representative signs linens. Applicant records with Erie County Clerk.",confidence:"High",risk:false,risk_desc:""},
-{id:"o20",name:"PIP Permit & Construction Drawings",phase:"Construction Permitting",category:"Town",min:14,avg:30,max:60,dependencies:["o19"],responsible:"Town Engineer",notes:"Public Improvement Permit with approved construction drawings. Per NYS Town Law §277.",confidence:"High",risk:false,risk_desc:""},
-{id:"o20b",name:"Performance Bond",phase:"Construction Permitting",category:"Applicant",min:7,avg:21,max:45,dependencies:["o19"],responsible:"Bonding Company",notes:"Per NYS Town Law §277. Bond = estimated cost of all public improvements.",confidence:"High",risk:false,risk_desc:""},
-{id:"o20c",name:"Building Permits",phase:"Construction Permitting",category:"Town",min:7,avg:14,max:30,dependencies:["o20"],responsible:"Building Inspector",notes:"Individual lot permits. After PIP and County Clerk filing.",confidence:"High",risk:false,risk_desc:""},
-{id:"o21",name:"Site Clearing & Erosion Control",phase:"Construction",category:"Applicant",min:14,avg:30,max:60,dependencies:["o20"],responsible:"General Contractor",notes:"SPDES GP-0-24-001. Silt fence, inlet protection. Tree preservation per Conservation Board conditions.",confidence:"High",risk:false,risk_desc:""},
-{id:"o21b",name:"Underground Utilities (Water & Sewer)",phase:"Construction",category:"Applicant",min:45,avg:90,max:150,dependencies:["o21"],responsible:"Utility Contractors",notes:"Per Erie County Health specs. Sewer before road base. Pressure/leak testing.",confidence:"High",risk:false,risk_desc:""},
-{id:"o21c",name:"Drainage & Stormwater Construction",phase:"Construction",category:"Applicant",min:21,avg:45,max:90,dependencies:["o21"],responsible:"Utility Contractors",notes:"Per Ch. 144 Stormwater Management. Storm sewer, detention/retention per approved SWPPP.",confidence:"High",risk:false,risk_desc:""},
-{id:"o21d",name:"Road Construction (Base & Paving)",phase:"Construction",category:"Applicant",min:30,avg:60,max:120,dependencies:["o21b","o21c"],responsible:"Paving Contractor",notes:"Per approved plans. Subbase, base, binder, wearing course. April-November paving season.",confidence:"High",risk:false,risk_desc:""},
-{id:"o21e",name:"Sidewalks, Curbs & Monuments",phase:"Construction",category:"Applicant",min:14,avg:30,max:60,dependencies:["o21d"],responsible:"Contractor / Surveyor",notes:"ADA curb ramps. Iron pin monuments. Street name signs.",confidence:"High",risk:false,risk_desc:""},
-{id:"o22",name:"Vertical Construction (Homes)",phase:"Construction",category:"Applicant",min:150,avg:240,max:420,dependencies:["o21d","o20c"],responsible:"Builder",notes:"Per individual lot building permits. WNY climate: April-November primary season.",confidence:"Medium",risk:true,risk_desc:"WNY winters (92\" avg snow). Construction season April-November."},
-{id:"o23",name:"Town Engineer Inspections (Ongoing)",phase:"Inspections & Acceptance",category:"Town",min:0,avg:0,max:0,dependencies:["o21"],responsible:"Town Engineer / Highway",notes:"Ongoing during all construction phases. Inspection costs borne by developer.",confidence:"High",risk:false,risk_desc:""},
-{id:"o23b",name:"PE As-Built Certification",phase:"Inspections & Acceptance",category:"Applicant",min:14,avg:30,max:60,dependencies:["o21e","o21b"],responsible:"Registered PE",notes:"Certified as-built plans for all infrastructure. Required before maintenance bond and TB acceptance.",confidence:"High",risk:false,risk_desc:""},
-{id:"o24",name:"Maintenance Bond & Town Board Acceptance",phase:"Inspections & Acceptance",category:"Town",min:10,avg:21,max:45,dependencies:["o23b"],responsible:"Town Board",notes:"Maintenance bond replaces performance bond. TB resolution to accept roads/infrastructure. 2-year maintenance period.",confidence:"High",risk:true,risk_desc:"Roads private until TB acceptance. Deficiencies delay acceptance."},
-{id:"o25",name:"Certificate of Occupancy",phase:"Inspections & Acceptance",category:"Town",min:7,avg:14,max:30,dependencies:["o22","o23b"],responsible:"Building Inspector",notes:"Per dwelling. Requires infrastructure complete or bonded, all inspections passed.",confidence:"High",risk:false,risk_desc:""}
-];
-// Town data: pendleton
-const PT=[
-{id:"p1",name:"Site Feasibility & Due Diligence",phase:"Pre-Application",category:"Applicant",min:14,avg:21,max:45,dependencies:[],responsible:"Applicant / Engineer",notes:"Zoning per Ch. 247. NOTE: Niagara County (not Erie). Niagara County Health for septic/water if not municipal.",confidence:"High",risk:false,risk_desc:""},
-{id:"p2",name:"Boundary & Topographic Survey",phase:"Pre-Application",category:"Applicant",min:14,avg:30,max:60,dependencies:["p1"],responsible:"NYS Licensed Surveyor",notes:"Per §220-17. Scale ≤400 ft/inch. Show lots, streets, drainage, wetlands, structures, contours.",confidence:"High",risk:false,risk_desc:""},
-{id:"p3",name:"SEQR EAF Preparation",phase:"Pre-Application",category:"Applicant",min:7,avg:14,max:30,dependencies:["p1"],responsible:"Environmental Consultant",notes:"EAF Part 1. PB is lead agency for SEQR. Short or Full form based on acreage/Type I thresholds.",confidence:"High",risk:true,risk_desc:"Full EIS can add 6-18 months if Positive Declaration."},
-{id:"p4",name:"Sketch Plan Submission",phase:"Sketch Plan",category:"Applicant",min:3,avg:7,max:14,dependencies:["p2","p3"],responsible:"Applicant",notes:"Per §220-17A. Submit to Administrative Assistant. Include sketch, EAF, application fee.",confidence:"High",risk:false,risk_desc:""},
-{id:"p5",name:"PB Sketch Review & Classification",phase:"Sketch Plan",category:"Town",min:21,avg:38,max:50,dependencies:["p4"],responsible:"Planning Board",notes:"Classifies minor (≤4 lots, no road) vs major. Monthly meetings typical. Reviews lot layout, drainage concept, access.",confidence:"High",risk:true,risk_desc:"Monthly PB = up to 30-day wait for next meeting."},
-{id:"p6",name:"Preliminary Plat Preparation",phase:"Preliminary Plat",category:"Applicant",min:45,avg:90,max:150,dependencies:["p5"],responsible:"Applicant / PE",notes:"Per §220-19. 14 copies at ≤100 ft/inch. Show contours, utilities, drainage plan, road profiles, cross-sections.",confidence:"High",risk:false,risk_desc:""},
-{id:"p6b",name:"Ch. 247 Stormwater Management Plan",phase:"Preliminary Plat",category:"Applicant",min:14,avg:30,max:60,dependencies:["p5"],responsible:"Applicant / PE",notes:"Per Ch. 247 Art. XIII Stormwater Management. SWPPP required for >1 acre disturbance. Submitted with preliminary.",confidence:"High",risk:false,risk_desc:""},
-{id:"p7",name:"SEQR Determination",phase:"Preliminary Plat",category:"Town",min:14,avg:30,max:60,dependencies:["p6"],responsible:"Planning Board",notes:"Per NYS Town Law §276. Neg Dec continues; Pos Dec triggers full EIS process.",confidence:"High",risk:true,risk_desc:"Positive Declaration triggers full EIS (6-18+ months)."},
-{id:"p7b",name:"Agency Referrals — Internal",phase:"Preliminary Plat",category:"Town",min:14,avg:21,max:30,dependencies:["p6"],responsible:"Code Enforcement / Highway",notes:"Highway Superintendent, Code Enforcement, Town Engineer. Concurrent with SEQR.",confidence:"High",risk:false,risk_desc:""},
-{id:"p7c",name:"Agency Referrals — Niagara County (GML §239)",phase:"Preliminary Plat",category:"County",min:20,avg:30,max:45,dependencies:["p6"],responsible:"Niagara County Planning",notes:"Per GML §239-n. 30-day county review. NOTE: Niagara County, not Erie.",confidence:"High",risk:false,risk_desc:""},
-{id:"p8",name:"Preliminary Plat PB Review (62-Day Clock)",phase:"Preliminary Plat",category:"Town",min:14,avg:30,max:62,dependencies:["p7","p7b","p7c"],responsible:"Planning Board",notes:"Per NYS Town Law §276. 62-day statutory clock from complete application.",confidence:"High",risk:false,risk_desc:""},
-{id:"p9",name:"Public Hearing",phase:"Public Hearing",category:"Town",min:14,avg:21,max:45,dependencies:["p8"],responsible:"Planning Board",notes:"Per NYS Town Law §276. 5-day newspaper notice. SEQR determination must precede or be concurrent.",confidence:"High",risk:false,risk_desc:""},
-{id:"p9b",name:"Preliminary Approval",phase:"Preliminary Plat",category:"Milestone",min:0,avg:7,max:14,dependencies:["p9"],responsible:"Planning Board",notes:"Conditions of approval attached. 6-month validity for final plat submission.",confidence:"High",risk:false,risk_desc:""},
-{id:"p10",name:"NYSDEC Jurisdictional Determination",phase:"Infrastructure Permitting",category:"State Agency",min:45,avg:120,max:210,dependencies:["p9b"],responsible:"NYSDEC Region 9",notes:"2025 expanded wetlands jurisdiction. Required if any wetlands/watercourses on or adjacent to site.",confidence:"Medium",risk:true,risk_desc:"Adds 90-180 days if wetlands present."},
-{id:"p10b",name:"NYSDEC Wetlands Permit (Article 24)",phase:"Infrastructure Permitting",category:"State Agency",min:90,avg:180,max:365,dependencies:["p10"],responsible:"NYSDEC Region 9",notes:"Article 24 ECL. Required for disturbance within mapped wetland or 100-ft adjacent area.",confidence:"Medium",risk:true,risk_desc:"Individual permit 90-365 days."},
-{id:"p10c",name:"Niagara County Health Dept Approval",phase:"Infrastructure Permitting",category:"County",min:45,avg:75,max:135,dependencies:["p9b"],responsible:"Niagara County Health",notes:"Required for water/sewer approval. NOTE: Niagara County jurisdiction, not Erie.",confidence:"High",risk:false,risk_desc:""},
-{id:"p10d",name:"USACE Section 404 Permit",phase:"Infrastructure Permitting",category:"Federal",min:60,avg:120,max:365,dependencies:["p9b"],responsible:"USACE Buffalo District",notes:"Required for fill in waters of US/wetlands. Nationwide 29 or Individual permit. Pendleton has creek and wetland exposure.",confidence:"Medium",risk:true,risk_desc:"Individual permit 6-12+ months if Nationwide doesn't apply."},
-{id:"p10e",name:"Highway Access Permit (State/County)",phase:"Infrastructure Permitting",category:"State/County",min:30,avg:60,max:120,dependencies:["p9b"],responsible:"NYSDOT / Niagara County DPW",notes:"Required for access onto state or county roads. Separate application from PB review.",confidence:"Medium",risk:true,risk_desc:"NYSDOT reviews 60-180 days."},
-{id:"p11",name:"Final Plat Preparation",phase:"Final Plat",category:"Applicant",min:21,avg:45,max:90,dependencies:["p9b"],responsible:"Applicant / PE",notes:"Per §220-20. Ink on linen/Mylar. Include monument locations per Highway Supt determination.",confidence:"High",risk:false,risk_desc:""},
-{id:"p11b",name:"Monument Setting (Per Highway Supt)",phase:"Final Plat",category:"Applicant",min:7,avg:14,max:30,dependencies:["p11"],responsible:"NYS Licensed Surveyor",notes:"Per §220-20A(7). Highway Superintendent determines monument locations. Iron pins at all lot corners and angle points.",confidence:"High",risk:false,risk_desc:""},
-{id:"p11c",name:"Traffic Sign Plan & Cost Allocation",phase:"Final Plat",category:"Applicant",min:7,avg:14,max:21,dependencies:["p11"],responsible:"Applicant / Highway Supt",notes:"Per §220-20A(8). Street name signs, stop signs, speed limit signs. Developer bears cost of all traffic signage.",confidence:"High",risk:false,risk_desc:""},
-{id:"p12",name:"Final Plat PB Approval (62-Day Clock)",phase:"Final Plat",category:"Town",min:14,avg:30,max:62,dependencies:["p11","p11b","p11c"],responsible:"Planning Board",notes:"Per NYS Town Law §276. 62-day statutory clock. Failure to act = deemed approval.",confidence:"High",risk:false,risk_desc:""},
-{id:"p12b",name:"Niagara County Clerk Filing",phase:"Final Plat",category:"Milestone",min:3,avg:7,max:14,dependencies:["p12"],responsible:"Applicant",notes:"Filed with Niagara County Clerk. Within 62 days of PB Chair signature.",confidence:"High",risk:false,risk_desc:""},
-{id:"p13",name:"Construction Permits & Bond",phase:"Construction Permitting",category:"Town",min:14,avg:21,max:45,dependencies:["p12b"],responsible:"Code Enforcement / Highway",notes:"Per §220-20B. Approved construction drawings. Performance bond per NYS Town Law §277.",confidence:"High",risk:false,risk_desc:""},
-{id:"p13b",name:"Building Permits",phase:"Construction Permitting",category:"Town",min:7,avg:14,max:30,dependencies:["p13"],responsible:"Code Enforcement",notes:"Individual lot permits. After filing and construction permit.",confidence:"High",risk:false,risk_desc:""},
-{id:"p14",name:"Site Clearing & Erosion Control",phase:"Construction",category:"Applicant",min:14,avg:30,max:60,dependencies:["p13"],responsible:"General Contractor",notes:"SPDES GP-0-24-001. Erosion/sediment control per Ch. 247 SWPPP requirements.",confidence:"High",risk:false,risk_desc:""},
-{id:"p14b",name:"Underground Utilities (Water & Sewer)",phase:"Construction",category:"Applicant",min:45,avg:90,max:150,dependencies:["p14"],responsible:"Utility Contractors",notes:"Per Niagara County Health specs. Sewer before road base. Pressure/leak testing.",confidence:"High",risk:false,risk_desc:""},
-{id:"p14c",name:"Drainage Construction",phase:"Construction",category:"Applicant",min:30,avg:60,max:105,dependencies:["p14"],responsible:"Utility Contractors",notes:"Per §220-18D. Storm sewer, detention/retention. Drainage must be accepted before any CO issued.",confidence:"High",risk:true,risk_desc:"Per §220-18D — no CO until drainage accepted by Town."},
-{id:"p14d",name:"Road Construction (Base & Paving)",phase:"Construction",category:"Applicant",min:45,avg:75,max:135,dependencies:["p14b","p14c"],responsible:"Paving Contractor",notes:"Per approved plans. Subbase, base, binder, wearing course.",confidence:"High",risk:false,risk_desc:""},
-{id:"p14e",name:"Sidewalks, Curbs, Signs & Monuments",phase:"Construction",category:"Applicant",min:14,avg:30,max:60,dependencies:["p14d"],responsible:"Contractor / Surveyor",notes:"ADA curb ramps. Traffic signs per §220-20A(8) — developer cost. Monuments per Highway Supt.",confidence:"High",risk:false,risk_desc:""},
-{id:"p15",name:"Vertical Construction (Homes)",phase:"Construction",category:"Applicant",min:150,avg:240,max:420,dependencies:["p14d","p13b"],responsible:"Builder",notes:"Per individual lot building permits. WNY climate: April-November primary season.",confidence:"Medium",risk:true,risk_desc:"WNY winters. November frost deadline."},
-{id:"p16",name:"Town Engineer / Highway Inspections (Ongoing)",phase:"Inspections & CO",category:"Town",min:0,avg:0,max:0,dependencies:["p14"],responsible:"Code Enforcement / Engineer",notes:"Ongoing during construction. Highway Supt inspects road and drainage construction.",confidence:"High",risk:false,risk_desc:""},
-{id:"p16b",name:"PE As-Built Certification",phase:"Inspections & CO",category:"Applicant",min:14,avg:30,max:60,dependencies:["p14e","p14b"],responsible:"Registered PE",notes:"Certified as-built plans for all infrastructure. Required for drainage acceptance.",confidence:"High",risk:false,risk_desc:""},
-{id:"p17",name:"Drainage Acceptance (Required Before CO)",phase:"Inspections & CO",category:"Town",min:7,avg:14,max:30,dependencies:["p16b"],responsible:"Town Engineer / Highway",notes:"Per §220-18D. No Certificate of Occupancy until drainage system accepted by Town.",confidence:"High",risk:true,risk_desc:"Drainage acceptance gates ALL certificates of occupancy."},
-{id:"p18",name:"Certificate of Occupancy (or Temp 120-Day)",phase:"Inspections & CO",category:"Town",min:7,avg:14,max:30,dependencies:["p15","p17"],responsible:"Code Enforcement",notes:"Per §220-18E. Temp CO max 120 days if weather prohibits completion. Must convert to permanent or revoke.",confidence:"High",risk:true,risk_desc:"120-day temp CO — must convert to permanent. Revoked if conditions not met."}
-];
-// Town data: wheatfield
-const WT=[
-{id:"w1",name:"Site Feasibility & Due Diligence",phase:"Pre-Application",category:"Applicant",min:14,avg:21,max:45,dependencies:[],responsible:"Applicant / Engineer",notes:"Zoning per Ch. 200. Greenspace Master Plan. Niagara County. Conservation areas per §200-46.",confidence:"High",risk:false,risk_desc:""},
-{id:"w2",name:"Boundary & Topographic Survey",phase:"Pre-Application",category:"Applicant",min:14,avg:30,max:60,dependencies:["w1"],responsible:"NYS Licensed Surveyor",notes:"Per §200-47.2B. Include: boundaries, streams, wetlands, topo, soils, roads, 100-year floodplain.",confidence:"High",risk:false,risk_desc:""},
-{id:"w2b",name:"Resource Inventory / Base Map",phase:"Pre-Application",category:"Applicant",min:21,avg:35,max:60,dependencies:["w2"],responsible:"Environmental Consultant",notes:"Per §200-47.2B. Environmental suitability inventory: vegetation, trees (6\" caliper+), wildlife corridors, prime ag soils, scenic views.",confidence:"High",risk:false,risk_desc:""},
-{id:"w3",name:"Standard Subdivision Layout",phase:"Sketch Plan",category:"Applicant",min:21,avg:38,max:75,dependencies:["w2b"],responsible:"Applicant / PE",notes:"Per §200-47.2B. FIRST required layout: standard subdivision per underlying zoning district. Conventional lot sizes.",confidence:"High",risk:false,risk_desc:""},
-{id:"w3b",name:"Conservation/Cluster Layout",phase:"Sketch Plan",category:"Applicant",min:21,avg:38,max:75,dependencies:["w2b"],responsible:"Applicant / PE",notes:"Per §200-47.2B. SECOND required layout: conservation/cluster design. ≥40% open space. Development envelopes per §200-47.2E.",confidence:"High",risk:false,risk_desc:""},
-{id:"w4",name:"SEQR EAF Preparation",phase:"Sketch Plan",category:"Applicant",min:7,avg:14,max:30,dependencies:["w3","w3b"],responsible:"Environmental Consultant",notes:"EAF Part 1. TB is lead agency for conservation/cluster SEQR per §200-47.1G.",confidence:"High",risk:true,risk_desc:"Full EIS can add 6-18 months. TB-led coordinated review."},
-{id:"w5",name:"Sketch Plan Submission (Wed Noon, 1 Wk Prior)",phase:"Sketch Plan",category:"Applicant",min:1,avg:3,max:7,dependencies:["w3","w3b","w4"],responsible:"Applicant",notes:"Due 12:00 PM Wednesday, 1 week before PB meeting. 5 copies + fee + EAF. BOTH layouts required.",confidence:"High",risk:true,risk_desc:"Strict Wednesday noon deadline. Miss = wait for next monthly meeting."},
-{id:"w6",name:"PB Review of Both Layouts",phase:"Sketch Plan",category:"Town",min:14,avg:30,max:60,dependencies:["w5"],responsible:"Planning Board",notes:"Per §200-47.1B/C. PB reviews both standard and cluster layouts. Preliminary lot count determination.",confidence:"High",risk:false,risk_desc:""},
-{id:"w6b",name:"Greenspace Focus Group Consultation",phase:"Sketch Plan",category:"Town",min:14,avg:30,max:60,dependencies:["w5"],responsible:"Greenspace Focus Group",notes:"Per §200-47.1B. Advisory consultation. May recommend open space priorities, trail connections, preservation areas. May require multiple rounds.",confidence:"High",risk:false,risk_desc:""},
-{id:"w7",name:"Public Information Meeting",phase:"Sketch Plan",category:"Town",min:7,avg:14,max:30,dependencies:["w6","w6b"],responsible:"Planning Board",notes:"Per §200-47.1D. After applicant responds to PB and Focus Group comments. Neighborhood input.",confidence:"High",risk:false,risk_desc:""},
-{id:"w8",name:"PB Recommendation → TB Authorization",phase:"Sketch Plan",category:"Town",min:21,avg:35,max:60,dependencies:["w7"],responsible:"PB → Town Board",notes:"Per §200-47.1E/F. PB recommends; TB decides whether to authorize cluster design. TB can reject at any time.",confidence:"High",risk:true,risk_desc:"TB can reject cluster design. Applicant may need to revert to standard subdivision."},
-{id:"w9",name:"Preliminary Plat Preparation",phase:"Preliminary Plat",category:"Applicant",min:30,avg:60,max:120,dependencies:["w8"],responsible:"Applicant / PE",notes:"Per PB Form #4. Development envelopes, building footprints, open spaces per §200-47.2E. Full engineering.",confidence:"High",risk:false,risk_desc:""},
-{id:"w9b",name:"Ch. 164 Stormwater Management Plan",phase:"Preliminary Plat",category:"Applicant",min:14,avg:30,max:60,dependencies:["w8"],responsible:"Applicant / PE",notes:"Per Ch. 164 (L.L. No. 9-2007). SWPPP required for all land development subject to PB review. Stormwater Management Officer reviews.",confidence:"High",risk:false,risk_desc:""},
-{id:"w10",name:"SEQR Coordinated Review (TB Lead)",phase:"Preliminary Plat",category:"Town",min:30,avg:60,max:120,dependencies:["w9"],responsible:"Town Board (Lead Agency)",notes:"Per §200-47.1G. TB begins coordinated SEQR. Refers back to PB for technical review. Dual-board process.",confidence:"High",risk:true,risk_desc:"Coordinated SEQR with TB as lead adds time. Dual-board complexity."},
-{id:"w10b",name:"Agency Referrals — Internal",phase:"Preliminary Plat",category:"Town",min:14,avg:21,max:30,dependencies:["w9"],responsible:"Building Dept / Highway / Engineer",notes:"Per Ch. 169. Building Inspector, Highway Supt, Town Engineer review for compliance.",confidence:"High",risk:false,risk_desc:""},
-{id:"w10c",name:"Agency Referrals — Niagara County (GML §239)",phase:"Preliminary Plat",category:"County",min:20,avg:30,max:45,dependencies:["w9"],responsible:"Niagara County Planning",notes:"Per GML §239-n. 30-day county review. NOTE: Niagara County, not Erie.",confidence:"High",risk:false,risk_desc:""},
-{id:"w11",name:"PB Review & Recommendation",phase:"Preliminary Plat",category:"Town",min:14,avg:30,max:62,dependencies:["w10","w10b","w10c"],responsible:"Planning Board",notes:"Per §200-47.1H and Ch. 169. PB recommends approval/denial to TB.",confidence:"High",risk:false,risk_desc:""},
-{id:"w12",name:"Public Hearing (TB)",phase:"Public Hearing",category:"Town",min:14,avg:21,max:45,dependencies:["w11"],responsible:"Town Board",notes:"Per Ch. 169 procedures. TB has subdivision approval authority per §200-96.",confidence:"High",risk:false,risk_desc:""},
-{id:"w12b",name:"Preliminary Approval",phase:"Preliminary Plat",category:"Milestone",min:0,avg:7,max:14,dependencies:["w12"],responsible:"Town Board",notes:"Conditions of approval. 6-month validity for final plat.",confidence:"High",risk:false,risk_desc:""},
-{id:"w13",name:"NYSDEC Jurisdictional Determination",phase:"Infrastructure Permitting",category:"State Agency",min:30,avg:90,max:180,dependencies:["w12b"],responsible:"NYSDEC Region 9",notes:"2025 expanded jurisdiction. Wheatfield has significant conservation areas per §200-46.",confidence:"Medium",risk:true,risk_desc:"Adds 90-180 days. Conservation area setbacks per §200-46."},
-{id:"w13b",name:"NYSDEC Wetlands Permit (Article 24)",phase:"Infrastructure Permitting",category:"State Agency",min:90,avg:180,max:365,dependencies:["w13"],responsible:"NYSDEC Region 9",notes:"Article 24 ECL. Wheatfield conservation areas include watercourses and wetlands per §200-46B.",confidence:"Medium",risk:true,risk_desc:"Individual permit 90-365 days."},
-{id:"w13c",name:"Niagara County Health Dept Approval",phase:"Infrastructure Permitting",category:"County",min:30,avg:60,max:120,dependencies:["w12b"],responsible:"Niagara County Health",notes:"Required for water/sewer. NOTE: Niagara County jurisdiction.",confidence:"High",risk:false,risk_desc:""},
-{id:"w13d",name:"USACE Section 404 Permit",phase:"Infrastructure Permitting",category:"Federal",min:60,avg:120,max:365,dependencies:["w12b"],responsible:"USACE Buffalo District",notes:"Required for fill in waters of US/wetlands. Wheatfield has significant conservation areas per §200-46 with watercourses and wetlands.",confidence:"Medium",risk:true,risk_desc:"Individual permit 6-12+ months if Nationwide doesn't apply."},
-{id:"w13e",name:"Highway Access Permit (State/County)",phase:"Infrastructure Permitting",category:"State/County",min:30,avg:60,max:120,dependencies:["w12b"],responsible:"NYSDOT / Niagara County DPW",notes:"Required for access onto state or county roads in Niagara County. Separate from Town process.",confidence:"Medium",risk:true,risk_desc:"NYSDOT reviews 60-180 days."},
-{id:"w14",name:"Final Plat Preparation",phase:"Final Plat",category:"Applicant",min:21,avg:45,max:90,dependencies:["w12b"],responsible:"Applicant / PE",notes:"Conservation easements per §200-47.4. HOA documents for open space maintenance. Development envelopes per §200-47.2E(1).",confidence:"High",risk:false,risk_desc:""},
-{id:"w14b",name:"Conservation Easement & HOA Documentation",phase:"Final Plat",category:"Applicant",min:30,avg:45,max:90,dependencies:["w14"],responsible:"Applicant / Attorney",notes:"Per §200-47.4. Permanent conservation easement on open space. HOA established for maintenance. No further subdivision permitted per §200-47.5C.",confidence:"High",risk:false,risk_desc:""},
-{id:"w15",name:"Final Plat TB Approval (62-Day Clock)",phase:"Final Plat",category:"Town",min:14,avg:30,max:62,dependencies:["w14","w14b"],responsible:"Town Board",notes:"Per §200-47.5B and Ch. 169. 62-day statutory clock. No further subdivision of cluster per §200-47.5C.",confidence:"High",risk:false,risk_desc:""},
-{id:"w15b",name:"Niagara County Clerk Filing",phase:"Final Plat",category:"Milestone",min:3,avg:7,max:14,dependencies:["w15"],responsible:"Applicant",notes:"Recorded with Niagara County Clerk. Within 62 days of signature.",confidence:"High",risk:false,risk_desc:""},
-{id:"w16",name:"Construction Permits & Bond",phase:"Construction Permitting",category:"Town",min:14,avg:21,max:45,dependencies:["w15b"],responsible:"Building Dept / Engineer",notes:"Per §200-47.4B(2-3). Open space improvements must be completed or bonded BEFORE building permits issued.",confidence:"High",risk:false,risk_desc:""},
-{id:"w16b",name:"Building Permits",phase:"Construction Permitting",category:"Town",min:7,avg:14,max:30,dependencies:["w16"],responsible:"Building Dept",notes:"Per Ch. 69. Individual lot permits within development envelopes only. Min 20ft between structures per §200-47.2E.",confidence:"High",risk:false,risk_desc:""},
-{id:"w17",name:"Open Space & Trail Improvements",phase:"Construction",category:"Applicant",min:30,avg:60,max:105,dependencies:["w16"],responsible:"Landscape Contractor",notes:"Per §200-47.4B(2). Trails, landscaping, passive/active recreation per approved plan. Must be completed before or concurrent with infrastructure.",confidence:"High",risk:false,risk_desc:""},
-{id:"w17b",name:"Underground Utilities (Water & Sewer)",phase:"Construction",category:"Applicant",min:45,avg:90,max:150,dependencies:["w17"],responsible:"Utility Contractors",notes:"Per Niagara County Health specs. Sewer before road base.",confidence:"High",risk:false,risk_desc:""},
-{id:"w17c",name:"Drainage & Stormwater Construction",phase:"Construction",category:"Applicant",min:21,avg:45,max:90,dependencies:["w17"],responsible:"Utility Contractors",notes:"Per Ch. 164 Stormwater Management. Storm sewer, detention/retention per approved SWPPP.",confidence:"High",risk:false,risk_desc:""},
-{id:"w17d",name:"Road Construction (Base & Paving)",phase:"Construction",category:"Applicant",min:30,avg:60,max:120,dependencies:["w17b","w17c"],responsible:"Paving Contractor",notes:"Per Ch. 169 and Ch. 138 Public Improvements. Min pavement width per Town standards.",confidence:"High",risk:false,risk_desc:""},
-{id:"w17e",name:"Sidewalks, Curbs & Monuments",phase:"Construction",category:"Applicant",min:14,avg:30,max:60,dependencies:["w17d"],responsible:"Contractor / Surveyor",notes:"ADA curb ramps. Monuments per survey. Street name signs.",confidence:"High",risk:false,risk_desc:""},
-{id:"w18",name:"Vertical Construction (Homes)",phase:"Construction",category:"Applicant",min:150,avg:240,max:420,dependencies:["w17d","w16b"],responsible:"Builder",notes:"Within development envelopes only. Min 20ft between structures. 25ft front setback per §200-47.2E.",confidence:"Medium",risk:true,risk_desc:"WNY winters. Development envelope constraints limit footprint flexibility."},
-{id:"w19",name:"Town Engineer Inspections (Ongoing)",phase:"Inspections & Acceptance",category:"Town",min:0,avg:0,max:0,dependencies:["w17"],responsible:"Town Engineer",notes:"Ongoing during all construction phases. Infrastructure and open space inspection.",confidence:"High",risk:false,risk_desc:""},
-{id:"w19b",name:"PE As-Built Certification",phase:"Inspections & Acceptance",category:"Applicant",min:14,avg:30,max:60,dependencies:["w17e","w17b"],responsible:"Registered PE",notes:"Certified as-built plans for all infrastructure and open space improvements.",confidence:"High",risk:false,risk_desc:""},
-{id:"w20",name:"Maintenance Bond & Town Board Acceptance",phase:"Inspections & Acceptance",category:"Town",min:10,avg:21,max:45,dependencies:["w19b"],responsible:"Town Board",notes:"Maintenance bond. TB resolution to accept roads/infrastructure. 2-year maintenance period.",confidence:"High",risk:true,risk_desc:"Roads private until TB acceptance."},
-{id:"w21",name:"Certificate of Occupancy",phase:"Inspections & Acceptance",category:"Town",min:7,avg:14,max:30,dependencies:["w18","w19b"],responsible:"Building Dept",notes:"Per dwelling. Open space improvements must be complete. Per Ch. 200 §200-91.",confidence:"High",risk:false,risk_desc:""}
-];
-// Towns configuration
-const TOWNS={
-amherst:{id:"amherst",label:"Amherst",fullName:"Town of Amherst, NY",county:"Erie County",state:"New York",authority:"NYS Town Law §276 & §278",chapterRef:"Chapter 204 Subdivision Regulations",effectiveDate:"April 3, 2009",status:"Adopted",planningBoard:"1st & 3rd Thursdays at 6:30 PM",townBoard:"1st Monday (work) & 3rd Monday (regular)",contact:{address:"5583 Main St, Williamsville, NY 14221",phone:"(716) 631-7051",hours:"8:00 AM – 4:00 PM, Mon–Fri"},notes:"Jurisdiction excludes Village of Williamsville. Planning Director classifies Major (10+) or Minor (5–9 lots). SEQR review required.",tasks:AT,phaseOrder:["Pre-Application","Sketch Plan","Preliminary Plat","Infrastructure Permitting","Final Plat","Construction Permitting","Construction","Inspections & Acceptance"]},
-clarence:{id:"clarence",label:"Clarence",fullName:"Town of Clarence, NY",county:"Erie County",state:"New York",authority:"NYS Town Law Article 16 & Municipal Home Rule Law §10",chapterRef:"Chapter 193 — Subdivision of Land",effectiveDate:"Oct 12, 2005 (L.L. No. 5-2005, amended 12-1-2010)",status:"Adopted",planningBoard:"2nd & 4th Wednesdays (typical)",townBoard:"1st & 3rd Wednesdays",contact:{address:"1 Town Place, Clarence, NY 14031",phone:"(716) 741-8930",hours:"8:30 AM – 4:30 PM"},notes:"DUAL-BOARD: Town Board first, then Planning Board. Town Board has sole road dedication authority. §193-17 Adequate Public Facilities. Open Development Areas (Article V).",tasks:CT,phaseOrder:["Pre-Application","Concept Plan","Preliminary Plat","Agency Referrals","Infrastructure Permitting","Final Plat","County Clerk Filing","Construction","Inspections & Acceptance"]},
-hamburg:{id:"hamburg",label:"Hamburg",fullName:"Town of Hamburg, NY",county:"Erie County",state:"New York",authority:"NYS Town Law §276 & §278",chapterRef:"Planning Dept Major Subdivision Review",effectiveDate:"Fee schedule rev. 3/25/24",status:"Adopted",planningBoard:"Monthly (check schedule)",townBoard:"1st & 3rd Mondays",contact:{address:"6100 S. Park Ave, Hamburg, NY 14075",phone:"(716) 649-2023",hours:"Planning Dept — call"},notes:"Contact: Joshua Rogers. 2-week submittal deadline. Condos only R-3. Full EAF Part 1 required via DEC EAF Mapper. SWPPP fee varies by acreage.",tasks:HT,phaseOrder:["Pre-Application","Sketch Plan","Preliminary Plat","SEQR Review","Agency Referrals","Public Hearing","Infrastructure Permitting","Final Plat","Construction Permitting","Construction","Inspections & Acceptance"]},
-lancaster:{id:"lancaster",label:"Lancaster",fullName:"Town of Lancaster, NY",county:"Erie County",state:"New York",authority:"NYS Town Law §276 & Municipal Home Rule Law §10",chapterRef:"§400-38 Subdivisions",effectiveDate:"Amended 12-19-2022 (L.L. No. 10-2022)",status:"Adopted",planningBoard:"Monthly",townBoard:"Regular meetings",contact:{address:"21 Central Ave, Lancaster, NY 14086",phone:"(716) 683-1610",hours:"Mon–Fri business hours"},notes:"DUAL-BOARD: PB recommends → TB has SOLE FINAL AUTHORITY. 45-day PB clock + 45-day TB clock. Resubmission = full restart. 40% maintenance bond per Ch. 206. No flag lots per §400-38D(3). Separate NYSDOT/County highway access permit.",tasks:LT,phaseOrder:["Pre-Application","Sketch Plan","Preliminary Plat","Planning Board Review","Town Board Review","Infrastructure Permitting","Final Plat","Construction Permitting","Construction","Inspections & Acceptance"]},
-orchardPark:{id:"orchardPark",label:"Orchard Park",fullName:"Town of Orchard Park, NY",county:"Erie County",state:"New York",authority:"NYS Town Law §276 & §278",chapterRef:"Chapter 121 — Subdivision of Land",effectiveDate:"Amended 4-27-2011 (L.L. No. 1-2011)",status:"Adopted",planningBoard:"Monthly",townBoard:"Regular meetings",contact:{address:"4295 S. Buffalo St, Orchard Park, NY 14127",phone:"(716) 662-6400",hours:"Mon–Fri business hours"},notes:"THREE 62-DAY CLOCKS: (1) Hearing within 62d of receipt, (2) Action within 62d of hearing close, (3) Final plat within 62d of final hearing. PB has final authority. Conservation Board reviews. Dev Form 3 = multi-agency sign-off. Ch. 144 Stormwater.",tasks:OT,phaseOrder:["Pre-Application","Sketch Plan","Preliminary Plat","Public Hearing","Town Board Review","Infrastructure Permitting","Final Plat","Construction Permitting","Construction","Inspections & Acceptance"]},
-pendleton:{id:"pendleton",label:"Pendleton",fullName:"Town of Pendleton, NY",county:"Niagara County",state:"New York",authority:"NYS Town Law §276 & §278",chapterRef:"Chapter 220 — Subdivision of Land",effectiveDate:"As codified",status:"Adopted",planningBoard:"Monthly (check schedule)",townBoard:"Regular meetings",contact:{address:"6570 Campbell Blvd, Lockport, NY 14094",phone:"(716) 625-8833",hours:"Mon–Fri business hours"},notes:"Compact code (7 pages). Niagara County. Temp occupancy max 120 days per §220-18E. Highway Supt determines monuments/signs. Ch. 247 Art. XIII Stormwater. No CO until drainage accepted per §220-18D.",tasks:PT,phaseOrder:["Pre-Application","Sketch Plan","Preliminary Plat","Public Hearing","Infrastructure Permitting","Final Plat","Construction Permitting","Construction","Inspections & CO"]},
-wheatfield:{id:"wheatfield",label:"Wheatfield",fullName:"Town of Wheatfield, NY",county:"Niagara County",state:"New York",authority:"NYS Town Law §276, §278",chapterRef:"Ch. 169 Subdivision + Conservation/Cluster (§200-45–47)",effectiveDate:"Adopted (source: ecode360 codification; draft rev. March 2016)",status:"Adopted",planningBoard:"Regular meetings",townBoard:"Regular meetings",contact:{address:"2800 Church Rd, N. Tonawanda, NY 14120",phone:"(716) 694-6635",hours:"Mon–Fri business hours"},notes:"Submittal: Wed noon, 1 week before PB. Conservation/cluster ≥40% open space. Greenspace Focus Group. TB authorizes cluster. No further subdivision per §200-47.5C. Ch. 164 Stormwater (L.L. No. 9-2007). Conservation areas per §200-46.",tasks:WT,phaseOrder:["Pre-Application","Sketch Plan","Preliminary Plat","Public Hearing","Final Plat","Infrastructure Permitting","Construction Permitting","Construction","Inspections & Acceptance"]},
-};
-const TO=["amherst","clarence","hamburg","lancaster","orchardPark","pendleton","wheatfield"];
-const TOWN_IDS=TO;
-// Reference data: costs, document checklist, contacts
 
+// ============================================================================
+// UTILITIES
+// ============================================================================
 
-const COST_ESTIMATES=[
-  {category:"Engineering & Survey",items:[
-    {name:"Boundary/Topo Survey",range:"$8,000 – $25,000"},
-    {name:"Full Engineering (Prelim + Final)",range:"$40,000 – $120,000"},
-    {name:"SWPPP Design",range:"$5,000 – $15,000"},
-    {name:"Traffic Impact Study",range:"$8,000 – $20,000"},
-    {name:"Wetland Delineation",range:"$3,000 – $12,000"},
-  ]},
-  {category:"Environmental",items:[
-    {name:"Phase I ESA",range:"$2,500 – $5,000"},
-    {name:"Phase II ESA (if triggered)",range:"$10,000 – $40,000"},
-    {name:"NYSDEC Wetlands Permit (consultant)",range:"$5,000 – $25,000"},
-    {name:"USACE Section 404 (consultant)",range:"$5,000 – $30,000"},
-  ]},
-  {category:"Town Fees",items:[
-    {name:"Application Filing Fee",range:"$500 – $2,500"},
-    {name:"Engineering Review Escrow",range:"$5,000 – $25,000"},
-    {name:"Public Hearing Notice",range:"$300 – $750"},
-    {name:"PIP Permit Fee",range:"$500 – $5,000"},
-    {name:"SWPPP Review Fee",range:"$500 – $3,000"},
-  ]},
-  {category:"Infrastructure (Per Lot)",items:[
-    {name:"Road Construction",range:"$15,000 – $35,000"},
-    {name:"Water Main Extension",range:"$5,000 – $15,000"},
-    {name:"Sanitary Sewer Extension",range:"$8,000 – $20,000"},
-    {name:"Storm Sewer / Detention",range:"$5,000 – $15,000"},
-    {name:"Sidewalks & Curbs",range:"$3,000 – $8,000"},
-  ]},
-  {category:"Bonding",items:[
-    {name:"Performance Bond (100-125%)",range:"1-3% of bond amount"},
-    {name:"Maintenance Bond (25-40%)",range:"1-2% of bond amount"},
-    {name:"Letter of Credit (alternative)",range:"Varies by institution"},
-  ]},
-];
-
-const DOC_CHECKLIST=[
-  {phase:"Pre-Application",items:["Title search / deed","Boundary survey","Topographic survey","Wetland delineation report","Flood zone determination (FEMA)","Zoning verification letter","Utility availability letters (water, sewer, electric, gas)","SEQR EAF Part 1","Pre-application conference request"]},
-  {phase:"Sketch / Preliminary",items:["Sketch plan drawings","Preliminary plat (sealed by PE/LS)","Stormwater Management Plan / SWPPP","Drainage report & calculations","Traffic impact study (if required)","GML §239 referral package","Environmental assessment / EAF Parts 2-3","Application fee payment","Escrow deposit"]},
-  {phase:"Final / Filing",items:["Final plat (ink on Mylar/linen)","As-built survey","Conservation easement (if applicable)","HOA documents (if applicable)","Performance bond / LOC","County Clerk filing fee","Covenants & restrictions","Deed dedication documents"]},
-  {phase:"Construction / Close",items:["PIP permit application","Construction drawings (approved)","SPDES GP NOI filing","Building permit applications","PE as-built certification","Maintenance bond","Town Board acceptance resolution","Certificate(s) of Occupancy"]},
-];
-
-function getContacts(town){
-  const isN=town.county==="Niagara County";
-  return[
-    {group:"Town Office",items:[{label:"Address",value:town.contact?.address||town.address||""},{label:"Phone",value:town.contact?.phone||town.phone||""},{label:"Hours",value:town.contact?.hours||town.hours||""},{label:"PB Schedule",value:town.planningBoard},{label:"TB Schedule",value:town.townBoard}]},
-    {group:"NYSDEC Region 9",items:[{label:"Office",value:"270 Michigan Ave, Buffalo, NY 14203"},{label:"Phone",value:"(716) 851-7220"},{label:"Email",value:"dep.r9@dec.ny.gov"}]},
-    {group:isN?"Niagara County Health":"Erie County Health",items:isN
-      ?[{label:"Address",value:"5467 Upper Mountain Rd, Lockport, NY 14094"},{label:"Phone",value:"(716) 439-7444"}]
-      :[{label:"Address",value:"503 Kensington Ave, Buffalo, NY 14214"},{label:"Phone",value:"(716) 961-6800"}]},
-    {group:"USACE Buffalo District",items:[{label:"Address",value:"1776 Niagara St, Buffalo, NY 14207"},{label:"Phone",value:"(716) 879-4200"},{label:"Branch",value:"Regulatory Branch"}]},
-    {group:isN?"Niagara County Planning":"Erie County DEDP",items:isN
-      ?[{label:"Address",value:"Vail Mansion, 6311 Inducon Corp Dr, Sanborn, NY 14132"},{label:"Phone",value:"(716) 439-7388"}]
-      :[{label:"Address",value:"95 Franklin St, Buffalo, NY 14202"},{label:"Phone",value:"(716) 858-8390"}]},
-    {group:"NYSDOT Region 5",items:[{label:"Office",value:"100 Seneca St, Buffalo, NY 14203"},{label:"Phone",value:"(716) 847-3238"}]},
-  ];
+// Convert Supabase task_template row to V9-compatible task object
+function templateToTask(t) {
+  return {
+    id: t.task_code,
+    _templateId: t.id,
+    name: t.name,
+    phase: t.phase,
+    category: t.category,
+    min: t.min_days,
+    avg: t.avg_days,
+    max: t.max_days,
+    p10: t.p10_days,
+    p50: t.p50_days,
+    p90: t.p90_days,
+    sample_size: t.sample_size || 0,
+    dependencies: typeof t.dependencies === 'string' ? JSON.parse(t.dependencies) : (t.dependencies || []),
+    responsible: t.responsible,
+    notes: t.notes,
+    confidence: t.confidence,
+    risk: t.risk,
+    risk_desc: t.risk_desc,
+    is_conditional: t.is_conditional,
+    condition_key: t.condition_key,
+    seasonal_category: t.seasonal_category,
+    board_dependent: t.board_dependent,
+  };
 }
 
-
-// === UTILITIES ===
-// === UTILITIES ===
-// Utilities
+// Convert Supabase municipality row to V9-compatible town object
+function muniToTown(m, tasks) {
+  const phaseOrder = typeof m.phase_order === 'string' ? JSON.parse(m.phase_order) : (m.phase_order || []);
+  const contact = typeof m.contact === 'string' ? JSON.parse(m.contact) : (m.contact || {});
+  return {
+    id: m.slug,
+    _muniId: m.id,
+    label: m.label,
+    fullName: m.full_name,
+    county: m.county,
+    state: m.state,
+    authority: m.authority,
+    chapterRef: m.chapter_ref,
+    effectiveDate: m.effective_date,
+    status: m.status,
+    planningBoard: m.pb_schedule,
+    townBoard: m.tb_schedule,
+    pb_meeting_rule: m.pb_meeting_rule,
+    tb_meeting_rule: m.tb_meeting_rule,
+    submission_deadline_days: m.submission_deadline_days,
+    contact,
+    notes: m.notes,
+    tasks: tasks.map(templateToTask),
+    phaseOrder,
+    is_dual_board: m.is_dual_board,
+  };
+}
 
 function computeSchedule(tasks){
   const map={};
@@ -441,8 +354,8 @@ function computeSchedule(tasks){
   tasks.forEach(t=>resolve(t.id));return map;
 }
 
-// Dev manager storage (separate from tracker)
-const DEV_PREFIX="wny-v8-dev-";
+// Legacy localStorage functions (kept for V9 offline fallback)
+const DEV_PREFIX="wny-v10-dev-";
 function loadDevList(){try{return JSON.parse(localStorage.getItem(DEV_PREFIX+"list"))||[]}catch{return[]}}
 function saveDevList(l){localStorage.setItem(DEV_PREFIX+"list",JSON.stringify(l))}
 function loadDevData(id){try{return JSON.parse(localStorage.getItem(DEV_PREFIX+id))}catch{return null}}
@@ -452,6 +365,85 @@ function deleteDevStorage(id){localStorage.removeItem(DEV_PREFIX+id)}
 function addDays(date,d){const r=new Date(date);r.setDate(r.getDate()+d);return r}
 function fmtDate(d){if(!d)return"—";const dt=new Date(d);return dt.toLocaleDateString("en-US",{month:"short",day:"numeric",year:"numeric"})}
 function genId(){return Date.now().toString(36)+Math.random().toString(36).slice(2,6)}
+
+
+
+// ============================================================================
+// V9 COMPATIBILITY SHIM
+// These global references are used by TrackerView and DevManager.
+// In V10 they resolve to Supabase-loaded data via window.__V10_TOWNS.
+// ============================================================================
+const _getTowns = () => window.__V10_TOWNS || {};
+const _getTownOrder = () => window.__V10_TOWN_ORDER || [];
+
+// Proxy objects that always reflect current loaded data
+const TOWNS = new Proxy({}, {
+  get(_, prop) { return _getTowns()[prop]; },
+  has(_, prop) { return prop in _getTowns(); },
+  ownKeys() { return Object.keys(_getTowns()); },
+  getOwnPropertyDescriptor(_, prop) {
+    if (prop in _getTowns()) return { configurable: true, enumerable: true, value: _getTowns()[prop] };
+  }
+});
+const TO = new Proxy([], {
+  get(_, prop) {
+    if (prop === 'length') return _getTownOrder().length;
+    if (prop === Symbol.iterator) return _getTownOrder()[Symbol.iterator].bind(_getTownOrder());
+    if (typeof prop === 'string' && !isNaN(prop)) return _getTownOrder()[Number(prop)];
+    if (prop === 'map') return _getTownOrder().map.bind(_getTownOrder());
+    if (prop === 'forEach') return _getTownOrder().forEach.bind(_getTownOrder());
+    if (prop === 'filter') return _getTownOrder().filter.bind(_getTownOrder());
+    if (prop === 'findIndex') return _getTownOrder().findIndex.bind(_getTownOrder());
+    if (prop === 'indexOf') return _getTownOrder().indexOf.bind(_getTownOrder());
+    if (prop === 'includes') return _getTownOrder().includes.bind(_getTownOrder());
+    if (prop === 'slice') return _getTownOrder().slice.bind(_getTownOrder());
+    return _getTownOrder()[prop];
+  },
+  has(_, prop) { return prop in _getTownOrder(); },
+});
+const TOWN_IDS = TO;
+
+// Cost estimates and doc checklist — resolve from Supabase-loaded data
+const COST_ESTIMATES = new Proxy([], {
+  get(_, prop) {
+    const data = window.COST_ESTIMATES_V10 || [];
+    if (prop === 'length') return data.length;
+    if (prop === Symbol.iterator) return data[Symbol.iterator].bind(data);
+    if (prop === 'map') return data.map.bind(data);
+    if (prop === 'forEach') return data.forEach.bind(data);
+    if (typeof prop === 'string' && !isNaN(prop)) return data[Number(prop)];
+    return data[prop];
+  }
+});
+const DOC_CHECKLIST = new Proxy([], {
+  get(_, prop) {
+    const data = window.DOC_CHECKLIST_V10 || [];
+    if (prop === 'length') return data.length;
+    if (prop === Symbol.iterator) return data[Symbol.iterator].bind(data);
+    if (prop === 'map') return data.map.bind(data);
+    if (prop === 'forEach') return data.forEach.bind(data);
+    if (prop === 'filter') return data.filter.bind(data);
+    if (typeof prop === 'string' && !isNaN(prop)) return data[Number(prop)];
+    return data[prop];
+  }
+});
+
+// getContacts — V10 version using Supabase data structure
+function getContacts(town){
+  const isN=town.county==="Niagara County";
+  return[
+    {group:"Town Office",items:[{label:"Address",value:town.contact?.address||""},{label:"Phone",value:town.contact?.phone||""},{label:"Hours",value:town.contact?.hours||""},{label:"PB Schedule",value:town.planningBoard},{label:"TB Schedule",value:town.townBoard}]},
+    {group:"NYSDEC Region 9",items:[{label:"Office",value:"270 Michigan Ave, Buffalo, NY 14203"},{label:"Phone",value:"(716) 851-7220"},{label:"Email",value:"dep.r9@dec.ny.gov"}]},
+    {group:isN?"Niagara County Health":"Erie County Health",items:isN
+      ?[{label:"Address",value:"5467 Upper Mountain Rd, Lockport, NY 14094"},{label:"Phone",value:"(716) 439-7444"}]
+      :[{label:"Address",value:"503 Kensington Ave, Buffalo, NY 14214"},{label:"Phone",value:"(716) 961-6800"}]},
+    {group:"USACE Buffalo District",items:[{label:"Address",value:"1776 Niagara St, Buffalo, NY 14207"},{label:"Phone",value:"(716) 879-4200"},{label:"Branch",value:"Regulatory Branch"}]},
+    {group:isN?"Niagara County Planning":"Erie County DEDP",items:isN
+      ?[{label:"Address",value:"Vail Mansion, 6311 Inducon Corp Dr, Sanborn, NY 14132"},{label:"Phone",value:"(716) 439-7388"}]
+      :[{label:"Address",value:"95 Franklin St, Buffalo, NY 14202"},{label:"Phone",value:"(716) 858-8390"}]},
+    {group:"NYSDOT Region 5",items:[{label:"Office",value:"100 Seneca St, Buffalo, NY 14203"},{label:"Phone",value:"(716) 847-3238"}]},
+  ];
+}
 
 
 // === SHARED COMPONENTS ===
@@ -774,7 +766,7 @@ function TrackerView({onNewDev}){
 
         {/* FOOTER */}
         <div style={{marginTop:12,padding:"10px 4px",fontSize:10,color:"#334155",lineHeight:1.6,textAlign:"center"}}>
-          {town.fullName} — {town.chapterRef} (eff. {town.effectiveDate}) · {town.county} · V6 Multi-Town · Progress saves automatically · Not legal advice
+          {town.fullName} — {town.chapterRef} (eff. {town.effectiveDate}) · {town.county} · V10-SUPABASE-EMPIRICAL · 2026-03-25 · Progress saves automatically · Not legal advice
         </div>
       </div>
 
@@ -1152,58 +1144,248 @@ function DevSettings({devData,town,onSave,onDelete,onBack}){
 }
 
 
-// === APP SHELL ===
-// App Shell — Routes between TrackerView and DevManager
+
+
+// ============================================================================
+// V10 APP SHELL — Supabase-aware data loading
+// ============================================================================
+
+// Connection status indicator
+function ConnStatus() {
+  const [status, setStatus] = useState(DB.isConnected() ? 'connected' : 'checking');
+  useEffect(() => {
+    const check = async () => {
+      if (!supabase || SUPABASE_ANON_KEY === "PASTE_YOUR_ANON_KEY_HERE") {
+        setStatus('offline');
+        return;
+      }
+      try {
+        const { error } = await supabase.from('municipalities').select('id').limit(1);
+        setStatus(error ? 'error' : 'connected');
+      } catch { setStatus('error'); }
+    };
+    check();
+    const interval = setInterval(check, 30000);
+    return () => clearInterval(interval);
+  }, []);
+  const colors = { connected: 'conn-green', checking: 'conn-yellow', offline: 'conn-yellow', error: 'conn-red' };
+  const labels = { connected: 'Supabase', checking: 'Connecting...', offline: 'Offline Mode', error: 'Supabase Error' };
+  return (
+    <span style={{fontSize:10,color:'#475569',display:'flex',alignItems:'center',gap:2}}>
+      <span className={`conn-dot ${colors[status]}`}/>
+      {labels[status]}
+    </span>
+  );
+}
 
 function App(){
-  // page: "tracker" | "new-dev" | "dev:<id>"
   const[page,setPage]=useState("tracker");
-  const[devList,setDevList]=useState(()=>loadDevList());
+  const[loading,setLoading]=useState(true);
+  const[towns,setTowns]=useState({});
+  const[townOrder,setTownOrder]=useState([]);
+  const[devList,setDevList]=useState([]);
+  const[costEstimates,setCostEstimates]=useState([]);
+  const[docChecklist,setDocChecklist]=useState([]);
 
-  // "New Development" creation flow
+  // Load all data from Supabase on mount
+  useEffect(()=>{
+    (async()=>{
+      try {
+        // Fetch municipalities
+        const munis = await DB.fetchMunicipalities();
+        // Fetch all task templates
+        const allTasks = await DB.fetchAllTaskTemplates();
+
+        if (munis.length > 0 && allTasks.length > 0) {
+          // Group tasks by municipality_id
+          const tasksByMuni = {};
+          allTasks.forEach(t => {
+            if (!tasksByMuni[t.municipality_id]) tasksByMuni[t.municipality_id] = [];
+            tasksByMuni[t.municipality_id].push(t);
+          });
+
+          // Build TOWNS-compatible object
+          const townsObj = {};
+          const order = [];
+          munis.sort((a,b) => a.slug.localeCompare(b.slug));
+          munis.forEach(m => {
+            const tasks = tasksByMuni[m.id] || [];
+            townsObj[m.slug] = muniToTown(m, tasks);
+            order.push(m.slug);
+          });
+          setTowns(townsObj);
+          setTownOrder(order);
+        } else {
+          console.warn("No Supabase data — check if schema is seeded");
+        }
+
+        // Load reference data
+        const costs = await DB.fetchCostEstimates();
+        if (costs.length > 0) {
+          // Group by category for V9 compatibility
+          const grouped = {};
+          costs.forEach(c => {
+            if (!grouped[c.category]) grouped[c.category] = { category: c.category, items: [] };
+            const range = (c.range_low != null && c.range_high != null)
+              ? `$${Number(c.range_low).toLocaleString()} – $${Number(c.range_high).toLocaleString()}`
+              : c.notes || 'Varies';
+            grouped[c.category].items.push({ name: c.item_name, range });
+          });
+          setCostEstimates(Object.values(grouped));
+        }
+
+        const docs = await DB.fetchDocChecklist();
+        if (docs.length > 0) {
+          setDocChecklist(docs.map(d => ({
+            phase: d.phase,
+            items: typeof d.items === 'string' ? JSON.parse(d.items) : d.items
+          })));
+        }
+
+        // Load developments
+        const devs = await DB.fetchDevelopments();
+        if (devs.length > 0) {
+          setDevList(devs.map(d => ({
+            id: d.id,
+            name: d.name,
+            townId: munis.find(m => m.id === d.municipality_id)?.slug || '',
+            createdAt: d.created_at
+          })));
+        } else {
+          // Try localStorage fallback
+          setDevList(loadDevList());
+        }
+
+      } catch (e) {
+        console.error("Data load error:", e);
+        // Fall through — UI will show empty state
+      }
+      setLoading(false);
+    })();
+  },[]);
+
+  // Make reference data available globally for V9 component compatibility
+  // (COST_ESTIMATES and DOC_CHECKLIST are referenced as globals in DevManager sub-components)
+  if (typeof window !== 'undefined') {
+    window.COST_ESTIMATES_V10 = costEstimates;
+    window.DOC_CHECKLIST_V10 = docChecklist;
+  }
+
   const[showCreateModal,setShowCreateModal]=useState(false);
   const[newDevName,setNewDevName]=useState("");
-  const[newDevTown,setNewDevTown]=useState(TO[0]);
+  const[newDevTown,setNewDevTown]=useState(townOrder[0]||"amherst");
 
-  const handleNewDev=()=>{
-    setShowCreateModal(true);
-  };
+  const handleNewDev=()=>{setShowCreateModal(true)};
 
-  const handleCreateDev=()=>{
-    if(!newDevName.trim())return;
+  const handleCreateDev=async()=>{
+    if(!newDevName.trim()||!towns[newDevTown])return;
+    const town=towns[newDevTown];
     const id=genId();
-    const t=TOWNS[newDevTown];
-    if(!t)return;
-    const tasks=JSON.parse(JSON.stringify(t.tasks));
+    const tasks=JSON.parse(JSON.stringify(town.tasks));
     const statuses={};
     tasks.forEach(tk=>{statuses[tk.id]="not_started"});
     const newDev={id,name:newDevName.trim(),townId:newDevTown,tasks,statuses,startDate:new Date().toISOString().slice(0,10),notes:"",createdAt:new Date().toISOString()};
-    saveDevData(id,newDev);
-    const newList=[...devList,{id,name:newDev.name,townId:newDevTown,createdAt:newDev.createdAt}];
+
+    // Save to Supabase if connected
+    if (supabase && town._muniId) {
+      try {
+        const created = await DB.createDevelopment({
+          name: newDev.name,
+          municipality_id: town._muniId,
+          start_date: newDev.startDate,
+          status: 'Active'
+        });
+        newDev.id = created.id;
+        // Create development_tasks
+        const devTasks = tasks.map((t, i) => ({
+          development_id: created.id,
+          task_template_id: t._templateId || null,
+          task_code: t.id,
+          status: 'not_started',
+          is_active: !t.is_conditional // Active by default unless conditional
+        }));
+        await DB.createDevTasks(devTasks);
+      } catch (e) {
+        console.error("Supabase create failed, saving locally:", e);
+      }
+    }
+
+    // Always save locally too (offline fallback)
+    saveDevData(newDev.id, newDev);
+    const newList=[...devList,{id:newDev.id,name:newDev.name,townId:newDevTown,createdAt:newDev.createdAt}];
     setDevList(newList);saveDevList(newList);
     setNewDevName("");setShowCreateModal(false);
-    setPage("dev:"+id);
+    setPage("dev:"+newDev.id);
   };
 
-  const handleOpenDev=(devId)=>{
-    setPage("dev:"+devId);
-  };
+  const handleOpenDev=(devId)=>{setPage("dev:"+devId)};
+  const handleBack=()=>{setDevList(loadDevList());setPage("tracker")};
 
-  const handleBack=()=>{
-    setDevList(loadDevList()); // refresh list
-    setPage("tracker");
-  };
+  // Loading state
+  if(loading) return(
+    <div style={{fontFamily:S.fontFamily,background:"#0c0f1a",minHeight:"100vh",display:"flex",alignItems:"center",justifyContent:"center",color:"#64748b"}}>
+      <div style={{textAlign:"center",animation:"pulse 1.5s infinite"}}>
+        <div style={{fontSize:32,marginBottom:16}}>◉</div>
+        <div style={{fontSize:14}}>Loading from Supabase...</div>
+        <div style={{fontSize:11,marginTop:8,color:"#334155"}}>{V10_VERSION}</div>
+      </div>
+    </div>
+  );
 
-  // If page is a dev, render DevManager
+  // Empty state — no data loaded
+  if(townOrder.length===0) return(
+    <div style={{fontFamily:S.fontFamily,background:"#0c0f1a",minHeight:"100vh",display:"flex",alignItems:"center",justifyContent:"center",color:"#64748b"}}>
+      <div style={{textAlign:"center",maxWidth:500,padding:40}}>
+        <div style={{fontSize:48,marginBottom:16}}>⚠</div>
+        <h2 style={{fontSize:20,color:"#e2e8f0",marginBottom:12}}>No Data Loaded</h2>
+        <p style={{fontSize:13,lineHeight:1.6,marginBottom:20}}>
+          The Supabase database appears empty. Please run the schema migration and seed scripts:
+        </p>
+        <div style={{background:"rgba(255,255,255,0.03)",border:"1px solid rgba(255,255,255,0.08)",borderRadius:12,padding:16,textAlign:"left",fontSize:12,fontFamily:S.monoFont,color:"#94a3b8",lineHeight:1.8}}>
+          1. 01_schema.sql<br/>
+          2. 02_seed_municipalities.sql<br/>
+          3. 03_seed_task_templates.sql<br/>
+          4. 04_seed_reference_data.sql
+        </div>
+        <p style={{fontSize:11,color:"#334155",marginTop:16}}>
+          Supabase URL: {SUPABASE_URL}<br/>
+          Anon Key: {SUPABASE_ANON_KEY === "PASTE_YOUR_ANON_KEY_HERE" ? "⚠ NOT SET — edit index.html" : "✓ Set"}
+        </p>
+        <ConnStatus/>
+      </div>
+    </div>
+  );
+
+  // Make globals available for V9 components that reference them
+  // These are assigned here so they update when state changes
+  if (typeof window !== 'undefined') {
+    window.__V10_TOWNS = towns;
+    window.__V10_TOWN_ORDER = townOrder;
+  }
+
+  // Dev manager page
   if(page.startsWith("dev:")){
     const devId=page.slice(4);
     return <DevManager devId={devId} onBack={handleBack}/>;
   }
 
-  // Main tracker page
+  // Main tracker page — pass towns data to TrackerView
   return(
     <div>
-      <TrackerView onNewDev={handleNewDev}/>
+      {/* V10 Header Bar */}
+      <div style={{position:"fixed",top:0,left:0,right:0,zIndex:100,background:"rgba(12,15,26,0.95)",backdropFilter:"blur(12px)",borderBottom:"1px solid rgba(255,255,255,0.06)",padding:"6px 20px",display:"flex",alignItems:"center",justifyContent:"space-between"}}>
+        <div style={{display:"flex",alignItems:"center",gap:12}}>
+          <span style={{fontSize:13,fontWeight:700,color:"#e2e8f0",fontFamily:S.fontFamily}}>WNY Land Dev Command Center</span>
+          <span style={{fontSize:10,padding:"2px 8px",borderRadius:4,background:"rgba(99,102,241,0.12)",color:"#a5b4fc",fontFamily:S.monoFont,fontWeight:600}}>V10</span>
+        </div>
+        <div style={{display:"flex",alignItems:"center",gap:16}}>
+          <ConnStatus/>
+          <button onClick={handleNewDev} style={{background:"#6366f1",border:"none",borderRadius:8,padding:"6px 16px",color:"#fff",fontSize:12,fontWeight:600,cursor:"pointer",fontFamily:S.fontFamily}}>+ New Development</button>
+        </div>
+      </div>
+      <div style={{paddingTop:40}}>
+        <TrackerView onNewDev={handleNewDev}/>
+      </div>
 
       {/* Development list bar at bottom */}
       {devList.length>0&&(
@@ -1213,7 +1395,7 @@ function App(){
             {devList.map(dev=>(
               <button key={dev.id} onClick={()=>handleOpenDev(dev.id)} style={{background:"rgba(99,102,241,0.08)",border:"1px solid rgba(99,102,241,0.2)",borderRadius:8,padding:"5px 12px",color:"#a5b4fc",fontSize:11,cursor:"pointer",fontFamily:S.fontFamily,fontWeight:500,whiteSpace:"nowrap",display:"flex",alignItems:"center",gap:6}}>
                 <span style={{width:5,height:5,borderRadius:"50%",background:"#6366f1"}}/>
-                {dev.name} <span style={{color:"#475569"}}>({TOWNS[dev.townId]?.label||""})</span>
+                {dev.name} <span style={{color:"#475569"}}>({towns[dev.townId]?.label||""})</span>
               </button>
             ))}
           </div>
@@ -1231,8 +1413,8 @@ function App(){
             <input value={newDevName} onChange={e=>setNewDevName(e.target.value)} placeholder="e.g. Maple Ridge Estates" onKeyDown={e=>e.key==="Enter"&&handleCreateDev()} style={{width:"100%",background:"rgba(255,255,255,0.04)",border:"1px solid rgba(255,255,255,0.08)",borderRadius:8,padding:"10px 14px",color:"#e2e8f0",fontSize:14,fontFamily:S.fontFamily,outline:"none",marginBottom:16}}/>
 
             <label style={{fontSize:12,color:"#94a3b8",display:"block",marginBottom:6}}>Town Template</label>
-            <div style={{display:"grid",gap:6,marginBottom:20}}>
-              {TO.map(tid=>{const t=TOWNS[tid];const isS=newDevTown===tid;return(
+            <div style={{display:"grid",gap:6,marginBottom:20,maxHeight:300,overflowY:"auto"}}>
+              {townOrder.map(tid=>{const t=towns[tid];if(!t)return null;const isS=newDevTown===tid;return(
                 <div key={tid} onClick={()=>setNewDevTown(tid)} style={{background:isS?"rgba(99,102,241,0.12)":"rgba(255,255,255,0.02)",border:isS?"1px solid rgba(99,102,241,0.4)":"1px solid rgba(255,255,255,0.06)",borderRadius:10,padding:"10px 14px",cursor:"pointer",display:"flex",justifyContent:"space-between",alignItems:"center",transition:"all 0.15s"}}>
                   <div>
                     <div style={{fontSize:13,fontWeight:isS?600:400,color:isS?"#e2e8f0":"#94a3b8"}}>{t.label}</div>
@@ -1255,6 +1437,7 @@ function App(){
 }
 
 ReactDOM.createRoot(document.getElementById('root')).render(React.createElement(App));
+
 </script>
 </body>
 </html>
