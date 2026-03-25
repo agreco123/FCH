@@ -4,11 +4,10 @@ const app = express();
 const PORT = process.env.PORT || 3000;
 
 app.use(express.static(__dirname));
-
 app.get('*', (req, res) => {
   res.sendFile(path.join(__dirname, 'index.html'));
 });
 
 app.listen(PORT, () => {
-  console.log(`WNY Dev Center V9 running on port ${PORT}`);
+  console.log(`WNY Land Dev Command Center V10 running on port ${PORT}`);
 });
