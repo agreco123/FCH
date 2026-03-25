@@ -1,87 +1,114 @@
-# WNY Land Development Command Center — V9
+# WNY Land Development Command Center — V10
 
-Multi-town residential subdivision tracker for Western New York. Tracks 7 towns across Erie & Niagara counties through the full municipal approval process.
+**V10-SUPABASE-EMPIRICAL** · 7-Town Residential Subdivision Tracker · Erie & Niagara Counties, NY
 
-## V9 Changes (from V8 PRO)
+## What Changed from V9
 
-- **68 duration corrections** across all 7 towns (best/expected/worst refined against municipal code)
-- **4 missing tasks added:**
-  - Pendleton: USACE Section 404 Permit (p10d) + Highway Access Permit (p10e) → now 35 tasks
-  - Wheatfield: USACE Section 404 Permit (w13d) + Highway Access Permit (w13e) → now 40 tasks
-- Version references updated throughout
+V10 replaces the localStorage-only data layer with a Supabase PostgreSQL backend while preserving the complete V9 UI (TrackerView, DevManager, 9-tab dashboard, Gantt chart).
 
-## Task Counts by Town
+### New in V10 (Phase 2 — Supabase Data Foundation)
+- **12-table Supabase schema** with Row Level Security, indexes, and auto-timestamps
+- **265 task templates** across 7 municipalities loaded from database
+- **Structured meeting rules** (JSON) for calendar-aware scheduling (Phase 4 prep)
+- **Conditional task flags** (`is_conditional`, `condition_key`) for task wizard (Phase 5 prep)
+- **Seasonal category tagging** (`Construction`, `Paving`, `Field_Survey`) for winter penalties
+- **Board-dependent flags** for meeting-snap scheduling
+- **Empirical duration columns** (`p10_days`, `p50_days`, `p90_days`) ready for Phase 3 calibration
+- **Board meetings table** with 2024–2030 dates generated from structured rules
+- **NYS/Federal holidays** 2024–2030 for business-day scheduling
+- **Connection status indicator** (green = Supabase, yellow = offline/cached)
+- **localStorage fallback** — app works offline, syncs when reconnected
 
-| Town | Tasks |
-|------|-------|
-| Amherst | 39 |
-| Clarence | 42 |
-| Hamburg | 36 |
-| Lancaster | 36 |
-| Orchard Park | 37 |
-| Pendleton | 35 |
-| Wheatfield | 40 |
-| **Total** | **265** |
+### Preserved from V9
+- All 265+ hardcoded task names, durations, dependencies, and regulatory references
+- Dependency chains and phase ordering per town
+- 6-state status system, risk flags, responsible parties
+- Phase color definitions, dark theme, DM Sans / JetBrains Mono typography
+- TrackerView Gantt chart, DevManager 9-tab dashboard
+- InlineEdit, PhaseSelect, StatusButton, StatCard components
 
-## Architecture
+---
+
+## Deployment: 4 Steps
+
+### Step 1: Run SQL Migrations in Supabase SQL Editor
+
+Go to your Supabase project → **SQL Editor** → run these files **in order**:
 
 ```
-FCH/
-├── index.html       ← Single-file React app (all data + components)
-├── server.js        ← Express static server
-├── package.json     ← Node dependencies
-├── render.yaml      ← Render deployment config
-└── README.md
+1. 01_schema.sql          — Creates all 12 tables, indexes, RLS policies, triggers
+2. 02_seed_municipalities.sql  — Seeds 7 municipalities with structured meeting rules
+3. 03_seed_task_templates.sql  — Seeds all 265 task templates with V10 flags
+4. 04_seed_reference_data.sql  — Seeds holidays, costs, contacts, board meetings, doc checklist
 ```
 
-## Two-Page Design
+### Step 2: Get Your Anon Key
 
-### Page 1: Township Tracker (Base)
-Select a town → see its Gantt chart, edit tasks inline, track completion, view risks. This is the **main landing page**.
+In Supabase Dashboard → **Settings** → **API** → copy the `anon` / `public` key.
 
-### Page 2: Development Manager
-Click "New Development" → create a named project from any town template → get a full project dashboard with:
-- Overview stats, phase progress
-- Timeline (Gantt) with status cycling
-- Task list with 6-state status
-- Risk register, milestones, contacts
-- Cost estimates, document checklist
-- Notes, export, settings
-- Compare all 7 towns side-by-side
+### Step 3: Set the Key in index.html
 
-## Deploy
+Open `index.html` and replace:
+```js
+const SUPABASE_ANON_KEY = "PASTE_YOUR_ANON_KEY_HERE";
+```
+with your actual anon key.
 
-### GitHub Pages (Static)
-Push the repo. Set Pages to deploy from the `main` branch root. The `index.html` serves directly — no build step needed.
+### Step 4: Deploy
 
-### Render (Web Service)
-1. Push to GitHub
-2. Connect repo to Render as **Web Service**
-3. Runtime: **Node**
-4. Build command: `npm install`
-5. Start command: `npm start`
-
-### Local
+**Option A: Local**
 ```bash
-npm install
-npm start
+npm install && npm start
 # Open http://localhost:3000
 ```
 
-Or just open `index.html` directly in a browser — no server required for local use.
+**Option B: Render**
+Push to GitHub, connect to Render using the included `render.yaml`.
 
-## Tech Stack
-- React 18 (CDN)
-- Babel Standalone (CDN, JSX compilation)
-- No build tools required
-- localStorage for persistence
+**Option C: Static hosting (Netlify, Vercel, etc.)**
+Just deploy `index.html` — it's a single-file app with CDN dependencies.
 
-## Data Sources
-Real municipal regulatory data from:
-- Amherst: Ch. 204 Subdivision Regulations
-- Clarence: Ch. 193 Subdivision of Land (Dual-Board)
-- Hamburg: Planning Dept Major Subdivision Review
-- Lancaster: §400-38 Subdivisions (Dual-Board, TB Final Authority)
-- Orchard Park: Ch. 121 Subdivision of Land (Three 62-Day Clocks)
-- Pendleton: Ch. 220 Subdivision of Land (Niagara County)
-- Wheatfield: Ch. 169 + §200-45–47 Conservation/Cluster (Niagara County)
+---
+
+## Verify Deployment
+
+After deploying, you should see:
+- Green connection dot → "Supabase" in the top bar
+- All 7 towns loading in the TrackerView town selector
+- Task counts matching V9 (Amherst: 39, Clarence: 42, Hamburg: 36, Lancaster: 36, Orchard Park: 37, Pendleton: 35, Wheatfield: 40)
+- Cost estimates, contacts, and doc checklist loading in DevManager tabs
+
+---
+
+## Schema: 12 Tables
+
+| Table | Purpose |
+|-------|---------|
+| `municipalities` | 7 towns with structured meeting rules |
+| `task_templates` | 265 tasks with V10 conditional/seasonal/board flags |
+| `developments` | User-created projects |
+| `development_tasks` | Per-project task instances with actual tracking |
+| `board_meetings` | 2024–2030 meeting dates from structured rules |
+| `board_minutes_raw` | Raw board minutes (Phase 3) |
+| `board_minutes_events` | Extracted events from minutes (Phase 3) |
+| `empirical_durations` | Computed duration pairs (Phase 3) |
+| `holidays` | NYS/Federal holidays 2024–2030 |
+| `cost_estimates` | Development cost ranges |
+| `contacts` | Regional agency contacts |
+| `doc_checklist` | Document submission checklist |
+
+---
+
+## Remaining Phases
+
+| Phase | Status | Description |
+|-------|--------|-------------|
+| Phase 1 | Pending | Internal Knowledge Refresh (regulatory research) |
+| Phase 2 | ✅ Complete | Supabase Data Foundation |
+| Phase 3 | Pending | Minutes Ingestion & Empirical Calibration |
+| Phase 4 | Pending | Calendar-Aware Scheduling Engine |
+| Phase 5 | Pending | Operational Intelligence Layer |
+
+---
+
+*V10 Engineering Directive · March 25, 2026 · Internal Use Only · Not Legal Advice*
