@@ -39,7 +39,7 @@ const{useState,useEffect,useRef,useCallback,useMemo}=React;
 const V10_VERSION = "V10-SUPABASE-EMPIRICAL";
 const V10_BUILD_DATE = "2026-03-25";
 const SUPABASE_URL = "https://cmymmhsdvrcjdyutjpnw.supabase.co";
-const SUPABASE_ANON_KEY = "sb_publishable_XK-H0tTj7g1QYzVlv88SkA_zIWR8uPO"; // <-- Replace with your anon key
+const SUPABASE_ANON_KEY = "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6ImNteW1taHNkdnJjamR5dXRqcG53Iiwicm9sZSI6ImFub24iLCJpYXQiOjE3NzIyMTE4OTQsImV4cCI6MjA4Nzc4Nzg5NH0.KTvUlZ5rtj09AwEW3NumHzHdIJGdKFSIig1c6zmdddo"; // <-- Replace with your anon key
 
 // ============================================================================
 // SUPABASE CLIENT + DATA ABSTRACTION LAYER
@@ -49,8 +49,22 @@ let supabaseConnected = false;
 
 try {
   if (window.supabase && SUPABASE_ANON_KEY !== "PASTE_YOUR_ANON_KEY_HERE") {
-    supabase = window.supabase.createClient(SUPABASE_URL, SUPABASE_ANON_KEY);
+    // Use memoryLocalStorage to avoid browser tracking prevention blocking localStorage
+    const memoryStorage = {
+      _data: {},
+      getItem(key) { return this._data[key] || null; },
+      setItem(key, value) { this._data[key] = value; },
+      removeItem(key) { delete this._data[key]; },
+    };
+    supabase = window.supabase.createClient(SUPABASE_URL, SUPABASE_ANON_KEY, {
+      auth: {
+        persistSession: false,
+        autoRefreshToken: false,
+        storage: memoryStorage,
+      }
+    });
     supabaseConnected = true;
+    console.log("Supabase client initialized successfully");
   }
 } catch (e) {
   console.warn("Supabase init failed, using localStorage fallback:", e);
@@ -88,7 +102,8 @@ const DB = {
     if (!supabase) return this._fromCache(table) || [];
     try {
       const { data, error } = await (query || supabase.from(table).select('*'));
-      if (error) throw error;
+      if (error) { console.error(`Supabase fetch ${table} error:`, error); throw error; }
+      console.log(`Supabase fetch ${table}: ${(data||[]).length} rows`);
       this._toCache(table, data);
       supabaseConnected = true;
       return data || [];
